@@ -1,0 +1,26 @@
+# Local history (Cursor / IDE)
+.history
+
+# Dependencies
+node_modules
+
+# Env and secrets
+.env
+.env.local
+*.local
+
+# Build outputs
+dist
+dist-ssr
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# PDFs if you prefer not to track
+# *.pdf

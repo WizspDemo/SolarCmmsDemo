@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>KPI Import</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        margin: 0;
+        padding: 12px;
+        background: #f5f5f5;
+        color: #333;
+      }
+
+      h1 {
+        font-size: 16px;
+        margin: 0 0 12px 0;
+      }
+
+      .form-group {
+        margin-bottom: 12px;
+      }
+
+      .form-group label {
+        display: block;
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+
+      .form-group select {
+        width: 100%;
+        max-width: 200px;
+        padding: 6px 8px;
+        font-size: 13px;
+        border: 1px solid #d1d1d1;
+        border-radius: 4px;
+      }
+
+      .form-group textarea {
+        width: 100%;
+        min-height: 120px;
+        padding: 8px;
+        font-size: 12px;
+        font-family: 'Consolas', 'Monaco', monospace;
+        border: 1px solid #d1d1d1;
+        border-radius: 4px;
+        resize: vertical;
+        box-sizing: border-box;
+      }
+
+      .btn-import {
+        padding: 8px 16px;
+        font-size: 13px;
+        border: 1px solid #0078d4;
+        background: #0078d4;
+        color: #fff;
+        border-radius: 4px;
+        cursor: pointer;
+        margin-top: 8px;
+      }
+
+      .btn-import:hover {
+        background: #106ebe;
+      }
+
+      .status {
+        font-size: 12px;
+        margin-top: 12px;
+      }
+
+      .status.success {
+        color: #107c10;
+      }
+
+      .status.error {
+        color: #a80000;
+      }
+
+      .hint {
+        font-size: 11px;
+        color: #666;
+        margin-top: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1 id="title">KPI Import</h1>
+    <div id="parkInfo" class="form-group" style="font-size: 12px; color: #666; margin-bottom: 12px;"></div>
+
+    <div class="form-group">
+      <label for="month">Month</label>
+      <select id="month">
+        <option value="1">Jan</option>
+        <option value="2">Feb</option>
+        <option value="3">Mar</option>
+        <option value="4">Apr</option>
+        <option value="5">May</option>
+        <option value="6">Jun</option>
+        <option value="7">Jul</option>
+        <option value="8">Aug</option>
+        <option value="9">Sep</option>
+        <option value="10">Oct</option>
+        <option value="11">Nov</option>
+        <option value="12">Dec</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="year">Year</label>
+      <select id="year">
+        <!-- Populated by JavaScript with current year default -->
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+        <input type="checkbox" id="chkFromHeaders" />
+        <span>Import από όλα τα columns (μήνας/έτος από το header κάθε στήλης)</span>
+      </label>
+      <div class="hint">Όταν ενεργό: επικολλάς πίνακα με headers (π.χ. Απρ-23, Μαΐ-23). Δημιουργεί μια εγγραφή ανά στήλη. Εγγραφές που υπάρχουν ήδη παραλείπονται.</div>
+    </div>
+
+    <div class="form-group">
+      <label for="pasteArea">Paste KPI data (tab/newline separated)</label>
+      <textarea id="pasteArea" placeholder="Paste 5 values (one per line) or full table:&#10;KPI&#9;Απρ-23&#9;Μαΐ-23&#10;PR(%)&#9;87,00&#9;88,28&#10;..."></textarea>
+      <div class="hint">Παράδειγμα: 5 γραμμές τιμών, ή πίνακας με ετικέτες (PR(%), AV(%), LD(£), En(kWh), Irrad). Υποστηρίζεται tab και ; ως separator.</div>
+    </div>
+
+    <button type="button" class="btn-import" id="btnImport">Import</button>
+
+    <div id="status" class="status"></div>
+
+    <script>
+      (function () {
+        'use strict';
+
+        var ENTITY_PERFORMANCE = 'solar_performance';
+        var FIELD_MONTH = 'solar_month';
+        var FIELD_YEAR = 'solar_year';
+        var FIELD_PR = 'solar_pr';
+        var FIELD_AV = 'solar_av';
+        var FIELD_LD = 'solar_ld';
+        var FIELD_EN = 'solar_en';
+        var FIELD_IRRAD = 'solar_irrad';
+        var FIELD_NAME = 'solar_name';
+        var FIELD_PARK_ODATA_BIND = 'solar_Solar_Park';
+        var ENTITY_SET_PARK = 'solar_locations';
+        var PANEDATA_STORAGE_KEY = 'solar_performance_kpi_pane_data';
+
+        var monthShortNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        var greekMonthMap = { 'απρ':4,'μαΐ':5,'μαϊ':5,'ιουν':6,'ιουλ':7,'αυγ':8,'σεπ':9,'οκτ':10,'νοε':11,'δεκ':12 };
+
+        function getPaneData() {
+          try {
+            var stored = sessionStorage.getItem(PANEDATA_STORAGE_KEY);
+            if (stored) return JSON.parse(stored);
+          } catch (e) {}
+          try {
+            var params = new URLSearchParams(window.location.search || '');
+            var dataParam = params.get('data') || params.get('Data');
+            if (dataParam) return JSON.parse(decodeURIComponent(dataParam));
+          } catch (e) {}
+          return null;
+        }
+
+        function initYearDropdown() {
+          var yearEl = document.getElementById('year');
+          var currentYear = new Date().getFullYear();
+          var startYear = currentYear - 5;
+          var endYear = currentYear + 2;
+          yearEl.innerHTML = '';
+          for (var y = endYear; y >= startYear; y--) {
+            var opt = document.createElement('option');
+            opt.value = y;
+            opt.textContent = y;
+            if (y === currentYear) opt.selected = true;
+            yearEl.appendChild(opt);
+          }
+        }
+
+        function parseMonthYearFromHeader(header) {
+          var h = (header || '').trim();
+          var m = h.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2,4})$/i);
+          if (m) {
+            var monthIdx = monthShortNames.indexOf(m[1]);
+            if (monthIdx >= 0) {
+              var yr = parseInt(m[2], 10);
+              if (yr < 100) yr += 2000;
+              return { month: monthIdx + 1, year: yr };
+            }
+          }
+          m = h.match(/^([A-Za-z\u0386-\u03ce]{3,5})-(\d{2,4})$/);
+          if (m) {
+            var greek = (m[1] || '').toLowerCase().replace(/ΐ/,'ι').replace(/ϊ/,'ι');
+            var monthNum = greekMonthMap[greek];
+            if (!monthNum) {
+              for (var k in greekMonthMap) {
+                if (greek.indexOf(k) === 0 || k.indexOf(greek) === 0) { monthNum = greekMonthMap[k]; break; }
+              }
+            }
+            if (monthNum) {
+              var yr = parseInt(m[2], 10);
+              if (yr < 100) yr += 2000;
+              return { month: monthNum, year: yr };
+            }
+          }
+          return null;
+        }
+
+        function findColumnIndex(headers, month, year) {
+          var targetShort = year.toString().slice(-2);
+          var targetHeader = monthShortNames[month - 1] + '-' + targetShort;
+          for (var i = 0; i < headers.length; i++) {
+            var h = (headers[i] || '').trim();
+            if (h === targetHeader) return i;
+            var parsed = parseMonthYearFromHeader(h);
+            if (parsed && parsed.month === month && parsed.year === year) return i;
+          }
+          return -1;
+        }
+
+        function parseFloatSafe(val) {
+          if (val === null || val === undefined) return null;
+          var t = String(val).trim();
+          if (t === '' || t === '-' || t === '£-' || t === '£ -' || t === '---' || t === '–' || t === '—') return null;
+          var s = t.replace(/[£\s]/g, '');
+          if (s.indexOf('%') >= 0) s = s.replace(/%/g, '');
+          if (s.indexOf(',') >= 0 && s.indexOf('.') >= 0) {
+            s = s.replace(/\./g, '').replace(',', '.');
+          } else if (s.indexOf(',') >= 0) {
+            s = s.replace(',', '.');
+          }
+          var n = parseFloat(s);
+          return isNaN(n) ? null : n;
+        }
+
+        function showError(msg) {
+          if (parent && parent.Xrm && parent.Xrm.Navigation) {
+            parent.Xrm.Navigation.openAlertDialog({ title: 'KPI Import', text: msg });
+          }
+        }
+
+        function setStatus(msg, cssClass) {
+          var el = document.getElementById('status');
+          el.textContent = msg || '';
+          el.className = 'status' + (cssClass ? ' ' + cssClass : '');
+        }
+
+        function checkExistingRecord(webApi, parkId, month, year) {
+          var guid = parkId.indexOf('-') >= 0 ? parkId : null;
+          if (!guid) return Promise.resolve(false);
+          var fetchXml = "<fetch top='1'><entity name='" + ENTITY_PERFORMANCE + "'>" +
+            "<filter><condition attribute='solar_solar_park' operator='eq' value='" + guid.replace(/'/g, "''") + "'/>" +
+            "<condition attribute='solar_month' operator='eq' value='" + month + "'/>" +
+            "<condition attribute='solar_year' operator='eq' value='" + String(year) + "'/>" +
+            "</filter></entity></fetch>";
+          return webApi.retrieveMultipleRecords(ENTITY_PERFORMANCE, "?fetchXml=" + encodeURIComponent(fetchXml))
+            .then(function(result) { return result.entities && result.entities.length > 0; });
+        }
+
+        function splitCells(line) {
+          var t = line.split(/\t/);
+          if (t.length <= 1 && line.indexOf(';') >= 0) t = line.split(';');
+          return t.map(function(c) { return (c || '').trim(); });
+        }
+
+        function isKpiLabel(str) {
+          var s = (str || '').trim();
+          return /^PR[\s(%]?/i.test(s) || /^AV[\s(%]?/i.test(s) || /^LD[\s(£]?/i.test(s) ||
+            /^En[\s(k]?/i.test(s) || /^Irrad/i.test(s);
+        }
+
+        function extractKpiMapFromRows(lines, colIdx, startRow) {
+          startRow = startRow === undefined ? 1 : startRow;
+          var kpiMap = {};
+          for (var i = startRow; i < lines.length; i++) {
+            var cells = splitCells(lines[i]);
+            var kpiName = cells[0] || '';
+            var val = cells[colIdx] !== undefined && cells[colIdx] !== '' ? cells[colIdx] : (cells[1] || cells[0]);
+            var num = parseFloatSafe(val);
+            if (num === null && val && /[\d,.\-%£]/.test(val)) {
+              num = parseFloatSafe(val.replace(/^[^\d.-]+/, '').trim());
+            }
+            if (/^PR/i.test(kpiName)) kpiMap.pr = num;
+            else if (/^AV/i.test(kpiName)) kpiMap.av = num;
+            else if (/^LD/i.test(kpiName)) kpiMap.ld = num;
+            else if (/^En/i.test(kpiName)) kpiMap.en = num;
+            else if (/^Irrad/i.test(kpiName)) kpiMap.irrad = num;
+          }
+          return kpiMap;
+        }
+
+        function extractKpiMapByRowOrder(lines, colIdx, startRow) {
+          startRow = startRow === undefined ? 1 : startRow;
+          var kpiMap = {};
+          var order = ['pr', 'av', 'ld', 'en', 'irrad'];
+          for (var i = 0; i < 5 && (startRow + i) < lines.length; i++) {
+            var cells = splitCells(lines[startRow + i]);
+            var val = (cells[colIdx] !== undefined && cells[colIdx] !== '') ? cells[colIdx] : cells[0];
+            var num = parseFloatSafe(val);
+            if (num === null && val && /[\d,.\-%£]/.test(val)) {
+              num = parseFloatSafe(val.replace(/^[^\d.-]+/, '').trim());
+            }
+            kpiMap[order[i]] = num;
+          }
+          return kpiMap;
+        }
+
+        function hasAnyKpiValues(kpiMap) {
+          return (kpiMap.pr != null) || (kpiMap.av != null) || (kpiMap.ld != null) || (kpiMap.en != null) || (kpiMap.irrad != null);
+        }
+
+        function buildPayload(parkId, month, year, kpiMap) {
+          var recordName = monthShortNames[month - 1] + ' ' + year;
+          var payload = {};
+          payload[FIELD_NAME] = recordName;
+          payload[FIELD_MONTH] = month;
+          payload[FIELD_YEAR] = String(year);
+          payload[FIELD_PARK_ODATA_BIND + '@odata.bind'] = '/' + ENTITY_SET_PARK + '(' + parkId + ')';
+          if (kpiMap.pr != null) payload[FIELD_PR] = kpiMap.pr;
+          if (kpiMap.av != null) payload[FIELD_AV] = kpiMap.av;
+          if (kpiMap.ld != null) payload[FIELD_LD] = kpiMap.ld;
+          if (kpiMap.en != null) payload[FIELD_EN] = kpiMap.en;
+          if (kpiMap.irrad != null) payload[FIELD_IRRAD] = kpiMap.irrad;
+          return payload;
+        }
+
+        function doImport() {
+          var monthEl = document.getElementById('month');
+          var yearEl = document.getElementById('year');
+          var pasteEl = document.getElementById('pasteArea');
+          var chkFromHeaders = document.getElementById('chkFromHeaders');
+          var fromAllHeaders = chkFromHeaders && chkFromHeaders.checked;
+
+          var month = parseInt(monthEl.value, 10);
+          var year = parseInt(yearEl.value, 10);
+          var text = (pasteEl.value || '').trim();
+
+          if (!text) {
+            setStatus('Please paste KPI data.', 'error');
+            return;
+          }
+
+          var lines = text.split(/\r?\n/).filter(function(l) { return l.trim(); });
+          if (lines.length < 1) {
+            setStatus('Please paste KPI data.', 'error');
+            return;
+          }
+
+          var webApi = parent && parent.Xrm && parent.Xrm.WebApi;
+          if (!webApi) {
+            setStatus('Xrm.WebApi is not available.', 'error');
+            return;
+          }
+
+          var paneData = getPaneData();
+          var parkId = paneData && paneData.parkId ? (paneData.parkId + '').replace(/[{}]/g, '') : null;
+          if (!parkId) {
+            setStatus('No Solar Location context. Open this pane from a Solar Location record.', 'error');
+            return;
+          }
+
+          if (fromAllHeaders) {
+            var headers = splitCells(lines[0]);
+            var columnsToImport = [];
+            var startCol = (/^KPI\s*$/i.test(headers[0]) || /^KPI$/i.test(headers[0])) ? 1 : 0;
+            for (var c = startCol; c < headers.length; c++) {
+              var parsed = parseMonthYearFromHeader(headers[c]);
+              if (parsed) columnsToImport.push({ colIdx: c, month: parsed.month, year: parsed.year });
+            }
+            if (columnsToImport.length === 0) {
+              setStatus('Δεν βρέθηκαν έγκυρα headers (π.χ. Απρ-23, Μαΐ-23).', 'error');
+              return;
+            }
+            setStatus('Import από ' + columnsToImport.length + ' στήλες...', '');
+            var created = 0, skipped = 0;
+            var skippedMsg = [];
+            var chain = Promise.resolve();
+            columnsToImport.forEach(function(col) {
+              chain = chain.then(function() {
+                var kpiMap = extractKpiMapFromRows(lines, col.colIdx);
+                if (!hasAnyKpiValues(kpiMap) && lines.length >= 6) {
+                  kpiMap = extractKpiMapByRowOrder(lines, col.colIdx);
+                }
+                return checkExistingRecord(webApi, parkId, col.month, col.year).then(function(exists) {
+                  if (exists) {
+                    skipped++;
+                    skippedMsg.push(monthShortNames[col.month - 1] + ' ' + col.year + ': υπάρχει ήδη');
+                    return Promise.resolve();
+                  }
+                  var payload = buildPayload(parkId, col.month, col.year, kpiMap);
+                  return webApi.createRecord(ENTITY_PERFORMANCE, payload).then(function() { created++; });
+                });
+              });
+            });
+            chain.then(function() {
+              var msg = created + ' δημιουργήθηκαν.';
+              if (skipped > 0) msg += ' Παραλείφθηκαν: ' + skippedMsg.join(', ');
+              setStatus(msg, skipped > 0 && created === 0 ? 'error' : 'success');
+              if (created > 0) pasteEl.value = '';
+            }).catch(function(err) {
+              var errMsg = err && err.message ? err.message : String(err);
+              setStatus('Import failed: ' + errMsg, 'error');
+              showError(errMsg);
+            });
+            return;
+          }
+
+          var kpiMap = {};
+          var firstLine = lines[0];
+          var headersArr = splitCells(firstLine);
+          var firstHasHeader = (/^KPI\s*$/i.test(headersArr[0] || '') && headersArr.length > 1) ||
+            /\t(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2}/i.test(firstLine) ||
+            /;(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2}/i.test(firstLine);
+          if (!firstHasHeader && headersArr.length > 1) {
+            for (var hi = 1; hi < headersArr.length; hi++) {
+              if (parseMonthYearFromHeader(headersArr[hi])) { firstHasHeader = true; break; }
+            }
+          }
+          var isKpiValueTable = !firstHasHeader && lines.length >= 5 && isKpiLabel(splitCells(lines[0])[0]);
+
+          if (isKpiValueTable) {
+            kpiMap = extractKpiMapFromRows(lines, 1, 0);
+          } else if (firstHasHeader && lines.length >= 2) {
+            var headers = splitCells(lines[0]);
+            var colIdx = findColumnIndex(headers, month, year);
+            if (colIdx < 0) {
+              colIdx = 1;
+              if (headers.length > 1) {
+                var targetHeader = monthShortNames[month - 1] + '-' + year.toString().slice(-2);
+                setStatus('Column "' + targetHeader + '" not found. Using second column.', 'error');
+              }
+            }
+            kpiMap = extractKpiMapFromRows(lines, colIdx);
+            if (!hasAnyKpiValues(kpiMap) && lines.length >= 6) {
+              kpiMap = extractKpiMapByRowOrder(lines, colIdx);
+            }
+          } else if (lines.length >= 5) {
+            kpiMap.pr = parseFloatSafe(lines[0]);
+            kpiMap.av = parseFloatSafe(lines[1]);
+            kpiMap.ld = parseFloatSafe(lines[2]);
+            kpiMap.en = parseFloatSafe(lines[3]);
+            kpiMap.irrad = parseFloatSafe(lines[4]);
+          } else {
+            setStatus('Paste 5 values (PR, AV, LD, En, Irrad) or full table with headers.', 'error');
+            return;
+          }
+
+          var recordName = monthShortNames[month - 1] + ' ' + year;
+          setStatus('Importing...', '');
+
+          checkExistingRecord(webApi, parkId, month, year)
+            .then(function(exists) {
+              if (exists) {
+                setStatus(recordName + ': υπάρχει ήδη — παραλείπεται.', 'error');
+                return;
+              }
+              var payload = buildPayload(parkId, month, year, kpiMap);
+              return webApi.createRecord(ENTITY_PERFORMANCE, payload).then(function() {
+                setStatus('Record created successfully: ' + recordName, 'success');
+                pasteEl.value = '';
+              });
+            })
+            .catch(function(err) {
+              var msg = err && err.message ? err.message : String(err);
+              setStatus('Import failed: ' + msg, 'error');
+              showError(msg);
+            });
+        }
+
+        function init() {
+          var paneData = getPaneData();
+          var parkId = paneData && paneData.parkId;
+          var parkName = paneData && paneData.parkName;
+          var parkEl = document.getElementById('parkInfo');
+          if (parkId) {
+            parkEl.textContent = 'Solar Location: ' + (parkName || '(' + parkId + ')');
+          } else {
+            parkEl.textContent = 'No Solar Location selected. Open this pane from a Solar Location form.';
+            parkEl.style.color = '#a80000';
+          }
+          initYearDropdown();
+          document.getElementById('btnImport').onclick = doImport;
+          document.getElementById('month').value = String(new Date().getMonth() + 1);
+        }
+
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', init);
+        } else {
+          init();
+        }
+      })();
+    </script>
+  </body>
+</html>

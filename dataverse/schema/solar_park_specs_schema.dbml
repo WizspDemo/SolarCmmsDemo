@@ -1,0 +1,83 @@
+Project "Solar Park Specs - Dataverse Schema" {
+  note: "Πίνακες Park Specs (Inverter, PV Modules, Comms, HV, Security) και σχέσεις με solar_location (Solar Parks). Prefix: solar_."
+}
+
+// Solar Parks (reference only; full definition in solardev_schema / dataverse_sync_final_schema)
+Table solar_location {
+  solar_locationid uuid [pk]
+}
+
+// === PARK SPECS TABLES ===
+
+Table solar_inverter_specs {
+  solar_inverter_specsid uuid [pk]
+  solar_park uuid
+  solar_inv_manufacturer varchar(255)
+  solar_inv_type varchar(255)
+  solar_inv_model varchar(255)
+  solar_inv_quantity int
+  solar_inv_lv_voltage decimal(18,2)
+  solar_inverter_power_kw decimal(18,2)
+  solar_assumed_warranty_period int
+  solar_warranty_expiry datetime
+}
+
+Table solar_pv_module_specs {
+  solar_pv_module_specsid uuid [pk]
+  solar_park uuid
+  solar_module_manufacturer varchar(255)
+  solar_module_model varchar(255)
+  solar_module_quantity int
+  solar_module_power int
+  solar_module_voc decimal(18,2)
+  solar_module_isc decimal(18,2)
+  solar_length int
+  solar_width int
+  solar_depth int
+  solar_structure varchar(255)
+}
+
+Table solar_comms_specs {
+  solar_comms_specsid uuid [pk]
+  solar_park uuid
+  solar_satellite_3g_4g varchar(255)
+  solar_lan_network varchar(255)
+  solar_scada_provider varchar(255)
+  solar_data_loggers varchar(255)
+}
+
+Table solar_hv_specs {
+  solar_hv_specsid uuid [pk]
+  solar_park uuid
+  solar_size_kv varchar(100)
+  solar_dno varchar(255)
+  solar_contact_information varchar(500)
+  solar_site_ref_number varchar(255)
+  solar_hv_contractor varchar(255)
+  solar_tboot_sub varchar(255)
+  solar_transformer_quantity int
+  solar_transformer_make varchar(255)
+  solar_transformer_model varchar(255)
+  solar_transformer_rating_kva varchar(100)
+}
+
+Table solar_security_specs {
+  solar_security_specsid uuid [pk]
+  solar_park uuid
+  solar_security varchar(255)
+  solar_security_codes_passwords text
+  solar_site_access_details text
+  solar_access_gate_codes text
+  solar_export_meter_location varchar(255)
+  solar_export_meter_access_details text
+  solar_other_information text
+  solar_land_owner_farmer_details text
+}
+
+// === RELATIONSHIPS TO SOLAR PARKS (solar_location) ===
+
+Ref: solar_inverter_specs.solar_park > solar_location.solar_locationid
+Ref: solar_pv_module_specs.solar_park > solar_location.solar_locationid
+Ref: solar_comms_specs.solar_park > solar_location.solar_locationid
+Ref: solar_hv_specs.solar_park > solar_location.solar_locationid
+Ref: solar_security_specs.solar_park > solar_location.solar_locationid

@@ -1,0 +1,96 @@
+{
+  "entity": "solar_location",
+  "description": "Park Specs accordion – Site από solar_location, Specs από related tables (solar_inverterspecs, solar_pvmodulespecs, solar_commsspecs, solar_hvspecs, solar_securityspecs). Για mapping πλήρους schema βλ. PARK_SPECS_DATAVERSE_MAPPING.md.",
+  "sections": [
+    {
+      "id": "site",
+      "label": "Site Information",
+      "sourceEntity": "solar_location",
+      "fields": [
+        { "key": "solar_name", "label": "Site" },
+        { "key": "solar_address", "label": "Address" },
+        { "key": "solar_postalcode", "label": "Post Code" },
+        { "key": "solar_account", "label": "Site Owner" },
+        { "key": "solar_landsizekm", "label": "Acres / Land Size" },
+        { "key": "solar_opendate", "label": "G59 / Commission" }
+      ]
+    },
+    {
+      "id": "inverter",
+      "label": "Inverter Specs",
+      "sourceEntity": "solar_inverterspecs",
+      "fields": [
+        { "key": "solar_inverter_manufacturer", "label": "Inv Manufacturer", "dataverseLogicalName": "solar_invmanufacturer" },
+        { "key": "solar_inverter_type", "label": "Inv Type", "dataverseLogicalName": "solar_invtype" },
+        { "key": "solar_inverter_model", "label": "Inv Model", "dataverseLogicalName": "solar_invmodel" },
+        { "key": "solar_inverter_quantity", "label": "Inv Quantity", "dataverseLogicalName": "solar_invquantity" },
+        { "key": "solar_inverter_lv_voltage", "label": "Inv LV Voltage", "dataverseLogicalName": "solar_invlvvoltage" },
+        { "key": "solar_inverter_power", "label": "Inverter Power (KW)", "dataverseLogicalName": "solar_inverterpowerkw" },
+        { "key": "solar_assumed_warranty_period", "label": "Assumed Warranty Period", "dataverseLogicalName": "solar_assumedwarrantyperiod" },
+        { "key": "solar_warranty_expiry", "label": "Warranty Expiry", "dataverseLogicalName": "solar_warrantyexpiry" }
+      ]
+    },
+    {
+      "id": "modules",
+      "label": "PV Modules Specs",
+      "sourceEntity": "solar_pvmodulespecs",
+      "fields": [
+        { "key": "solar_modulemanufacturer", "label": "Module Manufacturer" },
+        { "key": "solar_modulemodel", "label": "Module Model" },
+        { "key": "solar_modulequantity", "label": "Module Quantity" },
+        { "key": "solar_modulepower", "label": "Module Power (W)" },
+        { "key": "solar_modulevoc", "label": "Module Voc" },
+        { "key": "solar_moduleisc", "label": "Module Isc" },
+        { "key": "solar_modulelength", "label": "Length (mm)", "dataverseLogicalName": "solar_length" },
+        { "key": "solar_modulewidth", "label": "Width (mm)", "dataverseLogicalName": "solar_width" },
+        { "key": "solar_moduledepth", "label": "Depth (mm)", "dataverseLogicalName": "solar_depth" }
+      ]
+    },
+    {
+      "id": "comms",
+      "label": "Comms Specs",
+      "sourceEntity": "solar_commsspecs",
+      "fields": [
+        { "key": "solar_satellite3g4g", "label": "Satellite/3G/4G" },
+        { "key": "solar_lannetwork", "label": "LAN Network" },
+        { "key": "solar_scadaprovider", "label": "SCADA Provider" },
+        { "key": "solar_dataloggers", "label": "Data Loggers" }
+      ]
+    },
+    {
+      "id": "hv",
+      "label": "HV Specs",
+      "sourceEntity": "solar_hvspecs",
+      "fields": [
+        { "key": "solar_dnosizekv", "label": "Size (KV)", "dataverseLogicalName": "solar_sizekv" },
+        { "key": "solar_dnocontact", "label": "DNO / Contact", "dataverseLogicalName": "solar_dno" },
+        { "key": "solar_sitereferencenumber", "label": "Site Ref Number", "dataverseLogicalName": "solar_siterefnumber" },
+        { "key": "solar_transformerquantity", "label": "Transformer Qty" },
+        { "key": "solar_transformermake", "label": "Transformer Make" },
+        { "key": "solar_transformermodel", "label": "Transformer Model" }
+      ]
+    },
+    {
+      "id": "security",
+      "label": "Security Specs",
+      "sourceEntity": "solar_securityspecs",
+      "fields": [
+        { "key": "solar_security", "label": "Security" },
+        { "key": "solar_securitycodes", "label": "Security Codes", "dataverseLogicalName": "solar_securitycodesorpasswords" },
+        { "key": "solar_accessgatecodes", "label": "Access Gate Codes" },
+        { "key": "solar_exportmeterlocation", "label": "Export Meter Location" },
+        { "key": "solar_exportmeteraccessdetails", "label": "Export Meter Access" },
+        { "key": "solar_otherinformation", "label": "Other Information" },
+        { "key": "solar_landownerfarmerdetails", "label": "Land Owner/Farmer" }
+      ]
+    }
+  ],
+  "allFieldKeys": [
+    "solar_name", "solar_address", "solar_postalcode", "solar_account", "solar_landsizekm", "solar_opendate",
+    "solar_inverter_manufacturer", "solar_inverter_type", "solar_inverter_model", "solar_inverter_quantity", "solar_inverter_lv_voltage", "solar_inverter_power", "solar_assumed_warranty_period", "solar_warranty_expiry",
+    "solar_modulemanufacturer", "solar_modulemodel", "solar_modulequantity", "solar_modulepower", "solar_modulevoc", "solar_moduleisc", "solar_modulelength", "solar_modulewidth", "solar_moduledepth",
+    "solar_satellite3g4g", "solar_lannetwork", "solar_scadaprovider", "solar_dataloggers",
+    "solar_dnosizekv", "solar_dnocontact", "solar_sitereferencenumber", "solar_transformerquantity", "solar_transformermake", "solar_transformermodel",
+    "solar_security", "solar_securitycodes", "solar_accessgatecodes", "solar_exportmeterlocation", "solar_exportmeteraccessdetails", "solar_otherinformation", "solar_landownerfarmerdetails"
+  ]
+}

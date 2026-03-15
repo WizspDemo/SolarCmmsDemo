@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{PANE_TITLE}}</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        margin: 0;
+        padding: 12px;
+        background: #f5f5f5;
+        color: #333;
+      }
+
+      h1 {
+        font-size: 16px;
+        margin: 0 0 12px 0;
+      }
+
+      .form-group {
+        margin-bottom: 12px;
+      }
+
+      .form-group label {
+        display: block;
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+
+      .form-group select {
+        width: 100%;
+        max-width: 200px;
+        padding: 6px 8px;
+        font-size: 13px;
+        border: 1px solid #d1d1d1;
+        border-radius: 4px;
+      }
+
+      .form-group textarea {
+        width: 100%;
+        min-height: 120px;
+        padding: 8px;
+        font-size: 12px;
+        font-family: 'Consolas', 'Monaco', monospace;
+        border: 1px solid #d1d1d1;
+        border-radius: 4px;
+        resize: vertical;
+        box-sizing: border-box;
+      }
+
+      .form-row {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+
+      .btn-import {
+        padding: 8px 16px;
+        font-size: 13px;
+        border: 1px solid #0078d4;
+        background: #0078d4;
+        color: #fff;
+        border-radius: 4px;
+        cursor: pointer;
+        margin-top: 8px;
+      }
+
+      .btn-import:hover {
+        background: #106ebe;
+      }
+
+      .status {
+        font-size: 12px;
+        margin-top: 12px;
+      }
+
+      .status.success {
+        color: #107c10;
+      }
+
+      .status.error {
+        color: #a80000;
+      }
+
+      .hint {
+        font-size: 11px;
+        color: #666;
+        margin-top: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1 id="title">{{PANE_TITLE}}</h1>
+
+    <div class="form-group">
+      <label for="month">Month</label>
+      <select id="month">
+        <option value="1">Jan</option>
+        <option value="2">Feb</option>
+        <option value="3">Mar</option>
+        <option value="4">Apr</option>
+        <option value="5">May</option>
+        <option value="6">Jun</option>
+        <option value="7">Jul</option>
+        <option value="8">Aug</option>
+        <option value="9">Sep</option>
+        <option value="10">Oct</option>
+        <option value="11">Nov</option>
+        <option value="12">Dec</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="year">Year</label>
+      <select id="year">
+        <!-- Populated by JavaScript with current year default -->
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="pasteArea">Paste KPI data (tab/newline separated)</label>
+      <textarea id="pasteArea" placeholder="Paste from Excel/Sheets. Example:&#10;KPI	Apr-23	May-23&#10;PR(%)	87.00	88.28&#10;AV(%)	100.00	100.00&#10;LD(£)	-	-&#10;En(kWh)	13113.49	13213.49&#10;Irrad(kWh/m2)	24771.15	24871.15"></textarea>
+      <div class="hint">First row: headers (KPI, Apr-23, May-23, ...). Rows 2-6: PR, AV, LD, En, Irrad.</div>
+    </div>
+
+    <button type="button" class="btn-import" id="btnImport">Import</button>
+
+    <div id="status" class="status"></div>
+
+    <script>
+      (function () {
+        'use strict';
+
+        const ENTITY_PERFORMANCE = '{{ENTITY_PERFORMANCE}}';
+        const FIELD_MONTH = '{{FIELD_MONTH}}';
+        const FIELD_YEAR = '{{FIELD_YEAR}}';
+        const FIELD_PR = '{{FIELD_PR}}';
+        const FIELD_AV = '{{FIELD_AV}}';
+        const FIELD_LD = '{{FIELD_LD}}';
+        const FIELD_EN = '{{FIELD_EN}}';
+        const FIELD_IRRAD = '{{FIELD_IRRAD}}';
+        const FIELD_NAME = '{{FIELD_NAME}}';
+
+        var monthShortNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+        function initYearDropdown() {
+          var yearEl = document.getElementById('year');
+          var currentYear = new Date().getFullYear();
+          var startYear = currentYear - 5;
+          var endYear = currentYear + 2;
+          yearEl.innerHTML = '';
+          for (var y = endYear; y >= startYear; y--) {
+            var opt = document.createElement('option');
+            opt.value = y;
+            opt.textContent = y;
+            if (y === currentYear) opt.selected = true;
+            yearEl.appendChild(opt);
+          }
+        }
+
+        function parseMonthYearFromHeader(header) {
+          var m = header.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2,4})$/i);
+          if (!m) return null;
+          var monthIdx = monthShortNames.indexOf(m[1]);
+          if (monthIdx < 0) return null;
+          var yr = parseInt(m[2], 10);
+          if (yr < 100) yr += 2000;
+          return { month: monthIdx + 1, year: yr };
+        }
+
+        function findColumnIndex(headers, month, year) {
+          var targetShort = year.toString().slice(-2);
+          var targetHeader = monthShortNames[month - 1] + '-' + targetShort;
+          for (var i = 0; i < headers.length; i++) {
+            var h = (headers[i] || '').trim();
+            if (h === targetHeader) return i;
+            var parsed = parseMonthYearFromHeader(h);
+            if (parsed && parsed.month === month && parsed.year === year) return i;
+          }
+          return -1;
+        }
+
+        function parseFloatSafe(val) {
+          if (val === null || val === undefined || val === '' || val === '-' || val === '£ -') return null;
+          var s = String(val).replace(/[£,\s]/g, '');
+          var n = parseFloat(s);
+          return isNaN(n) ? null : n;
+        }
+
+        function showError(msg) {
+          if (parent && parent.Xrm && parent.Xrm.Navigation) {
+            parent.Xrm.Navigation.openAlertDialog({ title: 'KPI Import', text: msg });
+          }
+        }
+
+        function setStatus(msg, cssClass) {
+          var el = document.getElementById('status');
+          el.textContent = msg || '';
+          el.className = 'status' + (cssClass ? ' ' + cssClass : '');
+        }
+
+        function doImport() {
+          var monthEl = document.getElementById('month');
+          var yearEl = document.getElementById('year');
+          var pasteEl = document.getElementById('pasteArea');
+
+          var month = parseInt(monthEl.value, 10);
+          var year = parseInt(yearEl.value, 10);
+          var text = (pasteEl.value || '').trim();
+
+          if (!text) {
+            setStatus('Please paste KPI data.', 'error');
+            return;
+          }
+
+          var lines = text.split(/\r?\n/).filter(function(l) { return l.trim(); });
+          if (lines.length < 2) {
+            setStatus('Need at least header row and one data row.', 'error');
+            return;
+          }
+
+          var headers = lines[0].split(/\t/).map(function(h) { return h.trim(); });
+          var colIdx = findColumnIndex(headers, month, year);
+
+          if (colIdx < 0) {
+            colIdx = 1;
+            if (headers.length > 1) {
+              var targetHeader = monthShortNames[month - 1] + '-' + year.toString().slice(-2);
+              setStatus('Column "' + targetHeader + '" not found in headers. Using second column.', 'error');
+            }
+          }
+
+          var kpiMap = {};
+          for (var i = 1; i < lines.length; i++) {
+            var cells = lines[i].split(/\t/);
+            var kpiName = (cells[0] || '').trim();
+            var val = cells[colIdx];
+            if (/^PR/i.test(kpiName)) kpiMap.pr = parseFloatSafe(val);
+            else if (/^AV/i.test(kpiName)) kpiMap.av = parseFloatSafe(val);
+            else if (/^LD/i.test(kpiName)) kpiMap.ld = parseFloatSafe(val);
+            else if (/^En/i.test(kpiName)) kpiMap.en = parseFloatSafe(val);
+            else if (/^Irrad/i.test(kpiName)) kpiMap.irrad = parseFloatSafe(val);
+          }
+
+          var webApi = parent && parent.Xrm && parent.Xrm.WebApi;
+          if (!webApi) {
+            setStatus('Xrm.WebApi is not available.', 'error');
+            return;
+          }
+
+          var recordName = monthShortNames[month - 1] + ' ' + year;
+          var payload = {};
+          payload[FIELD_NAME] = recordName;
+          payload[FIELD_MONTH] = month;
+          payload[FIELD_YEAR] = year;
+          if (kpiMap.pr !== null) payload[FIELD_PR] = kpiMap.pr;
+          if (kpiMap.av !== null) payload[FIELD_AV] = kpiMap.av;
+          if (kpiMap.ld !== null) payload[FIELD_LD] = kpiMap.ld;
+          if (kpiMap.en !== null) payload[FIELD_EN] = kpiMap.en;
+          if (kpiMap.irrad !== null) payload[FIELD_IRRAD] = kpiMap.irrad;
+
+          setStatus('Importing...', '');
+
+          webApi.createRecord(ENTITY_PERFORMANCE, payload)
+            .then(function() {
+              setStatus('Record created successfully: ' + recordName, 'success');
+              pasteEl.value = '';
+            })
+            .catch(function(err) {
+              var msg = err && err.message ? err.message : String(err);
+              setStatus('Import failed: ' + msg, 'error');
+              showError(msg);
+            });
+        }
+
+        function init() {
+          initYearDropdown();
+          document.getElementById('btnImport').onclick = doImport;
+          document.getElementById('month').value = String(new Date().getMonth() + 1);
+        }
+
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', init);
+        } else {
+          init();
+        }
+      })();
+    </script>
+  </body>
+</html>

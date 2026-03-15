@@ -1,0 +1,1017 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solar Power Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.cdnfonts.com/css/segoe-ui-4" rel="stylesheet">
+
+    <!-- Dataverse Web Resources -->
+    <script src="https://org08dc9606.crm4.dynamics.com/WebResources/solar_react"></script>
+    <script src="https://org08dc9606.crm4.dynamics.com/WebResources/solar_reactdom"></script>
+    <script src="https://org08dc9606.crm4.dynamics.com/WebResources/solar_fluentui"></script>
+    <script src="https://org08dc9606.crm4.dynamics.com/WebResources/solar_babel"></script>
+
+    <!-- Dev Mock Provider (local dev only — do NOT upload to Dataverse) -->
+    <script src="devmock.js"></script>
+    <script src="PowerDashboard.mock.js"></script>
+    <script src="PowerDashboard.config.js"></script>
+    <script src="PowerDashboard.rules.js"></script>
+    <script src="PowerDashboard.data.js"></script>
+
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: {
+                primary: '#004E8C',
+                accent: '#ffaa44',
+                neutral: '#f3f2f1',
+                dark: '#201f1e',
+                border: '#edebe9',
+              }
+            },
+            fontFamily: { sans: ['"Segoe UI"', 'Roboto', '"Helvetica Neue"', 'Arial', 'sans-serif'] },
+            boxShadow: {
+              'fluent-card': '0 1.6px 3.6px 0 rgba(0,0,0,0.132), 0 0.3px 0.9px 0 rgba(0,0,0,0.108)',
+              'fluent-hover': '0 3.2px 7.2px 0 rgba(0,0,0,0.132), 0 0.6px 1.8px 0 rgba(0,0,0,0.108)',
+            }
+          },
+        },
+      }
+    </script>
+
+    <style>
+      body {
+        font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+        background-color: #faf9f8;
+        color: #201f1e;
+        margin: 0;
+        padding: 0;
+        -webkit-font-smoothing: antialiased;
+      }
+      .dashboard-font-base {
+        font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+        font-size: 14px;
+        font-weight: 400;
+        line-height: 20px;
+        color: #323130;
+      }
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: #f1f1f1; }
+      ::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+      .p-1\.5 { padding: 2px; }
+      .py-3 { padding-top: 0.25rem; padding-bottom: 0.25rem; }
+      .py-3, .p-1\.5 { box-sizing: border-box; border-width: 0; }
+    </style>
+</head>
+<body>
+    <div id="root" data-testid="power-dashboard-root"></div>
+
+    <script type="text/babel">
+      const { useState, useMemo, useEffect } = React;
+
+      // Low-level Xrm resolver (handles multiple hosts and Dynamics Client API)
+      function getXrmContext() {
+        try {
+          // 1. Current window
+          if (window.Xrm) return window.Xrm;
+
+          // 2. Parent (iframe scenario)
+          if (window.parent && window.parent.Xrm) return window.parent.Xrm;
+
+          // 3. Top-most parent
+          if (window.top && window.top.Xrm) return window.top.Xrm;
+
+          // 4. Dynamics legacy Client API
+          if (window.parent && typeof window.parent.GetGlobalContext === "function") {
+            return window.parent.GetGlobalContext();
+          }
+        } catch (e) {
+          const message = e && e.message ? e.message : String(e);
+
+          if (message.includes("Blocked a frame with origin")) {
+            console.warn(
+              "⚠️ PowerDashboard: Browser blocked access to parent Xrm due to cross-origin frame restrictions (common with ngrok or strict security settings). " +
+                "Please check whether your browser security or DevTools flags are still blocking cross-origin iframes, then reload the dashboard.",
+              e
+            );
+          } else {
+            console.warn("⚠️ PowerDashboard: Security restriction while accessing parent window for Xrm context.", e);
+          }
+        }
+
+        return null;
+      }
+
+      // Unified Xrm context helper for Dataverse & local redirects (Requestly/ngrok-friendly)
+      function xrmContext() {
+        const context = getXrmContext();
+
+        console.log(
+          "🔍 Checking for Xrm Context:",
+          context ? "FOUND ✅" : "NOT FOUND ❌"
+        );
+
+        return context;
+      }
+
+      function getXrmWebApi(silent) {
+        const xrm = xrmContext();
+        if (xrm && xrm.WebApi) {
+          return xrm.WebApi;
+        }
+        if (!silent) {
+          console.error('Dataverse context (Xrm.WebApi) is not available. Ensure this page runs inside a Model-driven app or a frame that exposes Xrm.');
+        }
+        return null;
+      }
+
+      const ConfigRef = window.PowerDashboardConfig || {};
+      const ENTITY_LOCATION = ConfigRef.ENTITY_LOCATION || 'solar_location';
+
+      function openSolarLocationForm(locationId) {
+        try {
+          const xrm = xrmContext();
+          if (xrm && xrm.Navigation && xrm.Navigation.openForm && locationId) {
+            xrm.Navigation.openForm({
+              entityName: ENTITY_LOCATION,
+              entityId: locationId
+            });
+          } else {
+            window.open('/main.aspx?pagetype=entityrecord&etn=' + ENTITY_LOCATION + '&id=' + locationId, '_blank');
+          }
+        } catch (e) {
+          window.open('/main.aspx?pagetype=entityrecord&etn=' + ENTITY_LOCATION + '&id=' + locationId, '_blank');
+        }
+      }
+
+      // --- ICON SYSTEM (Inline SVGs) ---
+      const createIcon = (paths) => ({ color = "currentColor", size = 24, className = "", ...props }) => (
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={className}
+          {...props}
+        >
+          {paths}
+        </svg>
+      );
+
+      const Activity = createIcon(<><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></>);
+      const AlertTriangle = createIcon(<><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><path d="M12 9v4" /><path d="M12 17h.01" /></>);
+      const CheckCircle2 = createIcon(<><circle cx="12" cy="12" r="10" /><path d="m9 12 2 2 4-4" /></>);
+      const LayoutDashboard = createIcon(<><rect width="7" height="9" x="3" y="3" rx="1" /><rect width="7" height="5" x="14" y="3" rx="1" /><rect width="7" height="9" x="14" y="12" rx="1" /><rect width="7" height="5" x="3" y="16" rx="1" /></>);
+      const ArrowUpRight = createIcon(<><path d="M7 7h10v10" /><path d="M7 17 17 7" /></>);
+      const ArrowDownRight = createIcon(<><path d="m7 7 10 10" /><path d="M17 7v10H7" /></>);
+      const Minus = createIcon(<><path d="M5 12h14" /></>);
+      const ExternalLink = createIcon(<><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></>);
+      const Search = createIcon(<><circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" /></>);
+      const Eye = createIcon(<><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12Z" /><circle cx="12" cy="12" r="3" /></>);
+      const EyeOff = createIcon(
+        <>
+          <path d="M3 3l18 18" />
+          <path d="M10.584 10.587a3 3 0 0 0 4.829 4.829" />
+          <path d="M9.88 4.14A9.77 9.77 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.248 3.489" />
+          <path d="M6.228 6.234C3.28 7.67 1 12 1 12a18.45 18.45 0 0 0 4.62 5.47" />
+        </>
+      );
+
+      // --- Components ---
+
+      const KpiCard = ({ title, value, unit, icon, color, trend, arrowId = 'kpi_arrow' }) => {
+        return (
+          <div className="bg-white p-6 rounded-md shadow-fluent-card hover:shadow-fluent-hover transition-shadow duration-200 border-l-4 border-brand-primary flex flex-col justify-between h-32 relative overflow-hidden group">
+            <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-110 duration-500">
+              {icon && React.cloneElement(icon, { size: 64 })}
+            </div>
+            <div className="flex justify-between items-start z-10">
+              <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">{title}</h3>
+              {icon && <div className="text-brand-primary opacity-80">{icon}</div>}
+            </div>
+            <div className="z-10 mt-2">
+              <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-bold text-gray-900" style={{ color: color }}>{value}</span>
+                  {unit && <span className="text-sm font-medium text-gray-500">{unit}</span>}
+              </div>
+              {trend && (
+                 <div className="mt-1 flex items-center text-xs">
+                    {trend === 'up' && <span className="text-green-600 font-medium flex items-center" data-testid={arrowId}><ArrowUpRight size={14} /></span>}
+                    {trend === 'down' && <span className="text-red-600 font-medium flex items-center" data-testid={arrowId}><ArrowDownRight size={14} /></span>}
+                    {trend === 'neutral' && <span className="text-gray-400 font-medium flex items-center" data-testid={arrowId}><Minus size={14} /></span>}
+                 </div>
+              )}
+            </div>
+          </div>
+        );
+      };
+
+      const Config = window.PowerDashboardConfig || {};
+      const Rules = window.PowerDashboardRules || {};
+      const getTrendInfo = Config.getTrendInfo || ((c, p) => (p == null ? { type: 'neutral', colorClass: 'text-gray-400' } : c < p ? { type: 'down', colorClass: 'text-green-600' } : c > p ? { type: 'up', colorClass: 'text-red-600' } : { type: 'neutral', colorClass: 'text-gray-400' }));
+      const getSparklineData = Config.getSparklineData || (() => [4, 5, 4.5, 5, 5, 4.5, 5, 5]);
+      const getCorrectiveRiskConfig = Config.getCorrectiveRiskConfig || (() => ({ label: 'Low risk', badgeColorClass: 'bg-green-50 text-green-700', headerColorClass: 'text-green-600', iconKey: 'check' }));
+      const getSparklineColor = Rules.getSparklineColor || ((t) => ({ corrective: '#ea580c', preventive: '#2563eb', remedial: '#dc2626' }[t] || 'currentColor'));
+      const getCardTextClass = Rules.getCardTextClass || ((t, v) => ({ corrective: { open: 'text-orange-700', secondary: 'text-orange-600' }, preventive: { open: 'text-blue-700', secondary: 'text-blue-600' }, remedial: { open: 'text-red-600', secondary: 'text-red-600' } }[t]?.[v] || ''));
+      const getStatusBadgeConfig = Rules.getStatusBadgeConfig || ((n) => (n >= 3 ? { bgColor: 'bg-red-100', textColor: 'text-red-800', label: 'Critical', dotColor: 'bg-red-500' } : n > 0 ? { bgColor: 'bg-yellow-100', textColor: 'text-yellow-800', label: 'Warning', dotColor: 'bg-yellow-500' } : { bgColor: 'bg-green-100', textColor: 'text-green-800', label: 'Healthy', dotColor: 'bg-green-500' }));
+      const getCardHeaderIconConfig = Rules.getCardHeaderIconConfig || ((o, ip, f) => ({ colorClass: 'text-brand-primary opacity-80', iconKey: 'check' }));
+      const getPreventiveHeaderIconConfig = Rules.getPreventiveHeaderIconConfig || ((o, ip, c) => ({ colorClass: 'text-brand-primary opacity-80', iconKey: 'check' }));
+      const getCorrectiveTrendConfig = Rules.getCorrectiveTrendConfig || ((c, p) => (p == null ? { colorClass: 'text-green-600', type: 'neutral', sparklineColor: '#9ca3af' } : (c || 0) > (p || 0) ? { colorClass: 'text-red-600', type: 'up', sparklineColor: '#dc2626' } : (c || 0) < (p || 0) ? { colorClass: 'text-green-600', type: 'down', sparklineColor: '#16a34a' } : { colorClass: 'text-green-600', type: 'neutral', sparklineColor: '#16a34a' }));
+      const getCorrectiveSparklineColorByDays = Rules.getCorrectiveSparklineColorByDays || (() => null);
+      const getCorrectiveSparklineDirectionByDays = Rules.getCorrectiveSparklineDirectionByDays || ((d) => (d != null && d <= 3 ? 'down' : 'up'));
+      const getCorrectiveArrowColorClassByDays = Rules.getCorrectiveArrowColorClassByDays || ((d) => (d != null && d <= 3 ? 'text-green-600' : d != null && d <= 5 ? 'text-orange-500' : 'text-red-600'));
+      const getPreventiveSparklineColorByRatio = Rules.getPreventiveSparklineColorByRatio || ((count, totalCompleted) => { const tot = totalCompleted ?? 0; if (tot === 0) return '#9ca3af'; const r = (count ?? 0) / tot; return r <= 0.4 ? '#16a34a' : r <= 0.6 ? '#ea580c' : '#dc2626'; });
+      const getPreventiveSparklineColorByCompletedRatio = Rules.getPreventiveSparklineColorByCompletedRatio || ((completed, open, inProgress) => { const c = completed ?? 0; const o = open ?? 0; const ip = inProgress ?? 0; const total = o + ip + c; if (total === 0) return '#9ca3af'; const r = c / total; return r >= 0.6 ? '#16a34a' : r >= 0.4 ? '#ea580c' : '#dc2626'; });
+      const preventiveSparklineCompletedRatioTooltip = Rules.PREVENTIVE_SPARKLINE_COMPLETED_RATIO_TOOLTIP || 'Completed vs total: ≥60% green | 40-60% orange | <40% red';
+      const correctiveSparklineTooltip = Rules.CORRECTIVE_SPARKLINE_RULE_TOOLTIP || '1-3 days green ↓ | 4-5 days orange ↑ | 6+ days red ↑';
+      const correctiveTrendTooltip = Rules.CORRECTIVE_TREND_RULE_TOOLTIP || '↑ worsening | ↓ improving | − unchanged';
+      const preventiveSparklineRatioTooltip = Rules.PREVENTIVE_SPARKLINE_RATIO_TOOLTIP || 'Green: ≤40% of completed | Orange: 40–60% | Red: 60–100%';
+      const headerIconCorrectiveRemedialTooltip = Rules.HEADER_ICON_CORRECTIVE_REMEDIAL_TOOLTIP || 'Rule: Open / (InProgress + Further) — <30% green ✓ | 30-60% orange | 60-80% red | ≥80% alert';
+      const headerIconPreventiveTooltip = Rules.HEADER_ICON_PREVENTIVE_TOOLTIP || 'Rule: (Open + InProgress) / Total — ≤30% green ✓ | 30-60% orange | 60-80% red | >80% alert';
+
+      const Sparkline = ({ data, className = '', color = 'currentColor', width = 24, height = 10, 'data-testid': dataTestId }) => {
+        if (!data || data.length < 2) return null;
+        const min = Math.min(...data);
+        const max = Math.max(...data);
+        const range = max - min || 1;
+        const w = width;
+        const h = height;
+        const pts = data.map((v, i) => [(i / (data.length - 1)) * w, h - ((v - min) / range) * h].join(',')).join(' ');
+        return (
+          <svg width={w} height={h} className={className} style={{ overflow: 'visible' }} data-testid={dataTestId}>
+            <polyline fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" points={pts} />
+          </svg>
+        );
+      };
+
+      const StatusBadge = ({ criticalDefects }) => {
+        const { bgColor, textColor, label, dotColor } = getStatusBadgeConfig(criticalDefects);
+        return (
+          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${bgColor} ${textColor}`}>
+            <span className={`w-1.5 h-1.5 mr-1.5 rounded-full ${dotColor}`}></span>
+            {label}
+          </span>
+        );
+      };
+
+      const PortfolioGrid = ({
+        data,
+        allCount,
+        searchQuery,
+        onSearchChange,
+        portfolioOptions,
+        selectedPortfolios,
+        onSelectedPortfoliosChange,
+        hiddenParkIds,
+        onToggleParkVisibility
+      }) => {
+        const [isPortfolioDropdownOpen, setIsPortfolioDropdownOpen] = useState(false);
+        const devMockActive = !!(window.DevMock && window.DevMock.isActive && window.DevMock.isActive());
+        const perParkRemedialTrend = devMockActive ? (window.DevMock.get('perParkRemedialTrend') || {}) : {};
+        const perParkCorrectiveTrend = devMockActive ? (window.DevMock.get('perParkCorrectiveTrend') || {}) : {};
+        const perParkCorrectiveInProgressTrend = devMockActive ? (window.DevMock.get('perParkCorrectiveInProgressTrend') || {}) : {};
+        const perParkCorrectiveFurtherTrend = devMockActive ? (window.DevMock.get('perParkCorrectiveFurtherTrend') || {}) : {};
+        const perParkRemedialInProgressTrend = devMockActive ? (window.DevMock.get('perParkRemedialInProgressTrend') || {}) : {};
+        const perParkRemedialFurtherTrend = devMockActive ? (window.DevMock.get('perParkRemedialFurtherTrend') || {}) : {};
+        const perParkPreventiveTrend = devMockActive ? (window.DevMock.get('perParkPreventiveTrend') || {}) : {};
+        const perParkPreventiveInProgressTrend = devMockActive ? (window.DevMock.get('perParkPreventiveInProgressTrend') || {}) : {};
+        const perParkPreventiveFurtherTrend = devMockActive ? (window.DevMock.get('perParkPreventiveFurtherTrend') || {}) : {};
+
+        const q = (searchQuery || '').trim();
+
+        const handleTogglePortfolio = (name) => {
+          if (!onSelectedPortfoliosChange) return;
+          const current = selectedPortfolios || [];
+          if (current.includes(name)) {
+            onSelectedPortfoliosChange(current.filter(p => p !== name));
+          } else {
+            onSelectedPortfoliosChange([...current, name]);
+          }
+        };
+
+        const handleClearPortfolios = () => {
+          if (onSelectedPortfoliosChange) {
+            onSelectedPortfoliosChange([]);
+          }
+        };
+
+        const portfolioLabel = !selectedPortfolios || selectedPortfolios.length === 0
+          ? 'All portfolios'
+          : `${selectedPortfolios.length} selected`;
+
+        const handleOpenForm = (park) => {
+          if (park && park.id) openSolarLocationForm(park.id);
+        };
+        const filtered = !q ? data : data.filter(p => (p.name || '').toLowerCase().includes(q.toLowerCase()));
+        return (
+          <div className="bg-white rounded-md shadow-fluent-card border border-brand-border">
+            <div className="p-4 border-b border-[#EDEBE9] bg-gray-50 text-[#201F1E]" style={{ borderBottomColor: 'rgba(237, 235, 233, 1)' }}>
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-lg font-semibold text-[#201F1E]">Solar Sites</h2>
+                    <span className="text-xs text-[#201F1E] bg-white px-2 py-0.5 rounded border border-gray-200">
+                      {filtered.length} / {allCount} Sites
+                    </span>
+                  </div>
+                  <div className="relative inline-block text-left">
+                    <button
+                      type="button"
+                      onClick={() => setIsPortfolioDropdownOpen((open) => !open)}
+                      className="inline-flex items-center gap-2 px-3 py-1.5 border border-gray-300 rounded-md bg-white text-xs font-medium text-[#201F1E] shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-brand-primary/40"
+                    >
+                      <span>Portfolio</span>
+                      <span className="text-[11px] text-[#201F1E]">{portfolioLabel}</span>
+                    </button>
+                    {isPortfolioDropdownOpen && (
+                      <div className="origin-top-right absolute right-0 mt-2 w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-20">
+                        <div className="p-2 max-h-64 overflow-auto text-sm">
+                          {portfolioOptions && portfolioOptions.length > 0 ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={handleClearPortfolios}
+                                className="w-full text-left px-2 py-1.5 text-xs text-brand-primary hover:bg-brand-primary/5 rounded mb-1"
+                              >
+                                Clear selection
+                              </button>
+                              <div className="border-t border-gray-100 my-1" />
+                              {portfolioOptions.map((name) => {
+                                const checked = (selectedPortfolios || []).includes(name);
+                                return (
+                                  <label
+                                    key={name}
+                                    className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 cursor-pointer"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      className="h-3.5 w-3.5 text-brand-primary border-gray-300 rounded focus:ring-brand-primary"
+                                      checked={checked}
+                                      onChange={() => handleTogglePortfolio(name)}
+                                    />
+                                    <span className="text-sm text-gray-700 truncate">{name}</span>
+                                  </label>
+                                );
+                              })}
+                            </>
+                          ) : (
+                            <div className="px-2 py-1.5 text-xs text-gray-400">
+                              No portfolios found.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="relative flex-1 sm:w-64">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" size={16} />
+                    <input
+                      type="text"
+                      placeholder="Search by park name..."
+                      value={searchQuery || ''}
+                      onChange={(e) => onSearchChange && onSearchChange(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-md focus:ring-2 focus:ring-brand-primary/30 focus:border-brand-primary outline-none"
+                    />
+                  </div>
+                  <div className="relative flex-1 sm:w-64">
+                    <span className="text-xs text-[#201F1E] font-medium bg-white px-2 py-1 rounded border border-gray-200 whitespace-nowrap inline-flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                      {filtered.length} visible parks
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            {filtered.length === 0 && data.length > 0 ? (
+              <div className="p-8 text-center text-gray-500">
+                <p>No Solar Parks found with that name.</p>
+                <p className="text-sm mt-1">Try a different search term.</p>
+              </div>
+            ) : (
+            <>
+            <div className="md:hidden divide-y divide-brand-border">
+              {filtered.map((park) => (
+                <div key={park.id} className="p-4 hover:bg-gray-50 transition-colors">
+                  <div className="flex justify-between items-start mb-3">
+                    <div>
+                       <div className="flex items-center gap-2">
+                         {onToggleParkVisibility && (
+                           <button
+                             type="button"
+                             onClick={() => onToggleParkVisibility(park.id)}
+                             className="p-1 rounded-full hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors"
+                             title={
+                               hiddenParkIds && hiddenParkIds.includes(park.id)
+                                 ? 'Include this park in totals'
+                                 : 'Exclude this park from totals'
+                             }
+                           >
+                             {hiddenParkIds && hiddenParkIds.includes(park.id) ? (
+                               <EyeOff size={16} />
+                             ) : (
+                               <Eye size={16} />
+                             )}
+                           </button>
+                         )}
+                         <div>
+                           <div className="font-bold text-brand-primary text-lg">{park.name}</div>
+                         </div>
+                       </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <StatusBadge criticalDefects={park.criticalDefects} />
+                      <button
+                        onClick={() => handleOpenForm(park)}
+                        className="p-1.5 rounded hover:bg-brand-primary/10 text-brand-primary transition-colors"
+                        title="Open Solar Park form"
+                      >
+                        <ExternalLink size={18} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
+                      <div className="bg-gray-50 p-2 rounded border border-gray-100">
+                          <div className="text-gray-500 text-xs uppercase tracking-wide">Corrective</div>
+                          {park.correctiveOpenCount > 0 ? (
+                            <div className={"font-mono font-semibold " + getCardTextClass('corrective', 'open')}>
+                              {park.correctiveOpenCount}
+                            </div>
+                          ) : (
+                            <div className="text-gray-400">0</div>
+                          )}
+                      </div>
+                      <div className="bg-gray-50 p-2 rounded border border-gray-100">
+                           <div className="text-gray-500 text-xs uppercase tracking-wide">Remedial</div>
+                           {park.remedialOpenCount > 0 ? (
+                             <div className={"font-mono font-semibold " + getCardTextClass('remedial', 'open')}>
+                               {park.remedialOpenCount}
+                             </div>
+                           ) : (
+                             <div className="text-gray-400">0</div>
+                           )}
+                      </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                       <span className={"inline-block px-2 py-1 text-xs font-semibold " + getCardTextClass('preventive', 'open') + " bg-blue-50 rounded border border-blue-100"}>
+                           {Math.max(0, (park.preventiveCount || 0) - (park.preventiveInProgressCount || 0))} Preventive
+                       </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-white border-b border-brand-border text-sm text-gray-500">
+                    <th className="py-3 px-4 font-semibold w-1/4">Site name</th>
+                    <th className="py-3 px-4 font-semibold text-center">
+                      <div className="flex flex-col gap-0.5">
+                        <span>Corrective Tasks</span>
+                      </div>
+                    </th>
+                    <th className="py-3 px-4 font-semibold text-center">
+                      <div className="flex flex-col gap-0.5">
+                        <span>Preventive Tasks</span>
+                      </div>
+                    </th>
+                    <th className="py-3 px-4 font-semibold text-center">
+                      <div className="flex flex-col gap-0.5">
+                        <span>Remedial Tasks</span>
+                      </div>
+                    </th>
+                    <th className="py-3 px-4 font-semibold text-center">Portfolio</th>
+                    <th className="py-3 px-4 font-semibold text-right w-16"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-brand-border">
+                  {filtered.map((park) => (
+                    <tr 
+                      key={park.id} 
+                      className="hover:bg-gray-50 transition-colors duration-150 group cursor-default"
+                    >
+                      <td className="py-0.5 px-4">
+                          <div className="flex items-center gap-2">
+                            {onToggleParkVisibility && (
+                              <button
+                                type="button"
+                                onClick={() => onToggleParkVisibility(park.id)}
+                                className="p-1 rounded-full hover:bg-gray-100 text-gray-500 hover:text-gray-700 transition-colors"
+                                title={
+                                  hiddenParkIds && hiddenParkIds.includes(park.id)
+                                    ? 'Include this park in totals'
+                                    : 'Exclude this park from totals'
+                                }
+                              >
+                                {hiddenParkIds && hiddenParkIds.includes(park.id) ? (
+                                  <EyeOff size={16} />
+                                ) : (
+                                  <Eye size={16} />
+                                )}
+                              </button>
+                            )}
+                            <div>
+                              <div className="font-bold text-brand-primary">{park.name}</div>
+                            </div>
+                          </div>
+                      </td>
+                      <td className="py-0.5 px-4">
+                          {(() => {
+                            const openCount = park.correctiveOpenCount || 0;
+                            const inProgressCount = park.correctiveInProgressCount || 0;
+                            const furtherCount = park.correctiveFurtherCount ?? Math.max(0, (park.correctiveCount || 0) - openCount - inProgressCount);
+                            const trendOpen = perParkCorrectiveTrend[park.id];
+                            const trendInProgress = perParkCorrectiveInProgressTrend[park.id];
+                            const trendFurther = perParkCorrectiveFurtherTrend[park.id];
+                            const byP = park.correctiveByPriority || { low: 0, medium: 0, high: 0, critical: 0 };
+                            return (
+                              <div className="flex flex-row gap-1.5 min-w-[260px]">
+                                <div className="flex-1 min-w-[120px] bg-gray-100 rounded px-1.5 py-0.5 border border-gray-200 overflow-hidden flex flex-wrap">
+                                  <div className="text-[10px] text-gray-500 mb-0.5 w-full">Open</div>
+                                  <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                                    {trendOpen ? (() => { const dir = (trendOpen.maxDaysInState != null && getCorrectiveSparklineDirectionByDays) ? getCorrectiveSparklineDirectionByDays(trendOpen.maxDaysInState) : (trendOpen.current > (trendOpen.previous ?? trendOpen.current) ? 'up' : trendOpen.current < (trendOpen.previous ?? trendOpen.current) ? 'down' : 'neutral'); const col = (trendOpen.maxDaysInState != null && getCorrectiveSparklineColorByDays) ? getCorrectiveSparklineColorByDays(trendOpen.maxDaysInState) : getSparklineColor('corrective'); const tt = trendOpen.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; const ArrowIcon = dir === 'up' ? ArrowUpRight : dir === 'down' ? ArrowDownRight : Minus; const arrowClass = dir === 'up' ? 'text-red-600' : dir === 'down' ? 'text-green-600' : 'text-gray-400'; return <><span className={arrowClass + ' shrink-0 cor_arrowOpen'} data-testid={'cor_arrowOpen_' + park.id} title={tt}><ArrowIcon size={10} /></span><span className="text-xs font-bold text-[#201F1E] shrink-0">{openCount}</span><span className="shrink-0 cor_sparkOpen" data-testid={'cor_sparkOpen_' + park.id} title={tt}><Sparkline data={getSparklineData(dir)} color={col} width={24} height={10} /></span></>; })() : <span className="text-xs font-bold text-[#201F1E] shrink-0">{openCount}</span>}
+                                    <div className="flex gap-1 text-[10px] text-gray-500 shrink-0">
+                                      <div className="flex flex-col items-center"><span>L</span><span className="font-bold text-[#201F1E]">{byP.low}</span></div>
+                                      <div className="flex flex-col items-center"><span>M</span><span className="font-bold text-[#201F1E]">{byP.medium}</span></div>
+                                      <div className="flex flex-col items-center"><span>H</span><span className="font-bold text-[#201F1E]">{byP.high}</span></div>
+                                      <div className="flex flex-col items-center"><span>C</span><span className="font-bold text-[#201F1E]">{byP.critical}</span></div>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="flex-1 min-w-0 bg-gray-50 rounded p-1.5 border border-gray-100">
+                                  <div className="text-[10px] text-gray-500 mb-0.5">In Progress</div>
+                                  <div className="flex items-center justify-between gap-1">
+                                    {trendInProgress ? (() => { const dir = (trendInProgress.maxDaysInState != null && getCorrectiveSparklineDirectionByDays) ? getCorrectiveSparklineDirectionByDays(trendInProgress.maxDaysInState) : (trendInProgress.current > (trendInProgress.previous ?? trendInProgress.current) ? 'up' : trendInProgress.current < (trendInProgress.previous ?? trendInProgress.current) ? 'down' : 'neutral'); const col = (trendInProgress.maxDaysInState != null && getCorrectiveSparklineColorByDays) ? getCorrectiveSparklineColorByDays(trendInProgress.maxDaysInState) : getSparklineColor('corrective'); const tt = trendInProgress.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; const ArrowIcon = dir === 'up' ? ArrowUpRight : dir === 'down' ? ArrowDownRight : Minus; const arrowClass = dir === 'up' ? 'text-red-600' : dir === 'down' ? 'text-green-600' : 'text-gray-400'; return <><span className={arrowClass + ' shrink-0 cor_arrowInProgress'} data-testid={'cor_arrowInProgress_' + park.id} title={tt}><ArrowIcon size={10} /></span><span className="text-xs font-bold text-[#201F1E]">{inProgressCount}</span><span className="shrink-0 cor_sparkInProgress" data-testid={'cor_sparkInProgress_' + park.id} title={tt}><Sparkline data={getSparklineData(dir)} color={col} /></span></>; })() : <span className="text-xs font-bold text-[#201F1E]">{inProgressCount}</span>}
+                                  </div>
+                                </div>
+                                <div className="flex-1 min-w-0 bg-gray-50 rounded p-1.5 border border-gray-100">
+                                  <div className="text-[10px] text-gray-500 mb-0.5">Further more</div>
+                                  <div className="flex items-center justify-between gap-1">
+                                    {trendFurther ? (() => { const dir = (trendFurther.maxDaysInState != null && getCorrectiveSparklineDirectionByDays) ? getCorrectiveSparklineDirectionByDays(trendFurther.maxDaysInState) : (trendFurther.current > (trendFurther.previous ?? trendFurther.current) ? 'up' : trendFurther.current < (trendFurther.previous ?? trendFurther.current) ? 'down' : 'neutral'); const col = (trendFurther.maxDaysInState != null && getCorrectiveSparklineColorByDays) ? getCorrectiveSparklineColorByDays(trendFurther.maxDaysInState) : getSparklineColor('corrective'); const tt = trendFurther.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; const ArrowIcon = dir === 'up' ? ArrowUpRight : dir === 'down' ? ArrowDownRight : Minus; const arrowClass = dir === 'up' ? 'text-red-600' : dir === 'down' ? 'text-green-600' : 'text-gray-400'; return <><span className={arrowClass + ' shrink-0 cor_arrowFurther'} data-testid={'cor_arrowFurther_' + park.id} title={tt}><ArrowIcon size={10} /></span><span className="text-xs font-bold text-[#201F1E]">{furtherCount}</span><span className="shrink-0 cor_sparkFurther" data-testid={'cor_sparkFurther_' + park.id} title={tt}><Sparkline data={getSparklineData(dir)} color={col} /></span></>; })() : <span className="text-xs font-bold text-[#201F1E]">{furtherCount}</span>}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })()}
+                      </td>
+                      <td className="py-0.5 px-4">
+                          {(() => {
+                            const openCount = Math.max(0, (park.preventiveCount || 0) - (park.preventiveInProgressCount || 0));
+                            const inProgressCount = park.preventiveInProgressCount || 0;
+                            const furtherCount = park.preventiveFurtherCount ?? Math.max(0, (park.preventiveCount || 0) - openCount - inProgressCount);
+                            const trendOpen = perParkPreventiveTrend[park.id];
+                            const trendInProgress = perParkPreventiveInProgressTrend[park.id];
+                            const trendFurther = perParkPreventiveFurtherTrend[park.id];
+                            return (
+                              <div className="flex flex-row gap-1.5 min-w-[260px]">
+                                <div className="flex-1 min-w-[120px] bg-gray-100 rounded px-1.5 py-0.5 border border-gray-200 overflow-hidden flex flex-wrap">
+                                  <div className="text-[10px] text-gray-500 mb-0.5 w-full">Open</div>
+                                  <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                                    <span className="text-xs font-bold text-[#201F1E] shrink-0">{openCount}</span>
+                                    {(trendOpen || true) && (() => { const preventiveCompleted = park.preventiveCompletedCount || 0; const col = getPreventiveSparklineColorByRatio(openCount, preventiveCompleted); const dir = col === '#16a34a' ? 'down' : 'up'; return <span className="shrink-0 prev_sparkOpen" data-testid={'prev_sparkOpen_' + park.id} title={preventiveSparklineRatioTooltip}><Sparkline data={getSparklineData(dir)} color={col} width={24} height={10} /></span>; })()}
+                                  </div>
+                                </div>
+                                <div className="flex-1 min-w-0 bg-gray-50 rounded p-1.5 border border-gray-100">
+                                  <div className="text-[10px] text-gray-500 mb-0.5">In Progress</div>
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span className="text-xs font-bold text-[#201F1E]">{inProgressCount}</span>
+                                    {(trendInProgress || true) && (() => { const preventiveCompleted = park.preventiveCompletedCount || 0; const col = getPreventiveSparklineColorByRatio(inProgressCount, preventiveCompleted); const dir = col === '#16a34a' ? 'down' : 'up'; return <span className="shrink-0 prev_sparkInProgress" data-testid={'prev_sparkInProgress_' + park.id} title={preventiveSparklineRatioTooltip}><Sparkline data={getSparklineData(dir)} color={col} /></span>; })()}
+                                  </div>
+                                </div>
+                                <div className="flex-1 min-w-0 bg-gray-50 rounded p-1.5 border border-gray-100">
+                                  <div className="text-[10px] text-gray-500 mb-0.5">Previous month</div>
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span className="text-xs font-bold text-[#201F1E]">{furtherCount}</span>
+                                    {(trendFurther || true) && (() => { const col = getPreventiveSparklineColorByCompletedRatio(furtherCount, openCount, inProgressCount); const dir = col === '#16a34a' ? 'down' : 'up'; return <span className="shrink-0 prev_sparkPreviousMonth" data-testid={'prev_sparkPreviousMonth_' + park.id} title={preventiveSparklineCompletedRatioTooltip}><Sparkline data={getSparklineData(dir)} color={col} /></span>; })()}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })()}
+                      </td>
+                      <td className="py-0.5 px-4">
+                          {(() => {
+                            const openCount = park.remedialOpenCount || 0;
+                            const inProgressCount = park.remedialInProgressCount || 0;
+                            const furtherCount = park.remedialFurtherCount ?? Math.max(0, (park.remedialCount || 0) - openCount - inProgressCount);
+                            const trendOpen = perParkRemedialTrend[park.id];
+                            const trendInProgress = perParkRemedialInProgressTrend[park.id];
+                            const trendFurther = perParkRemedialFurtherTrend[park.id];
+                            const byP = park.remedialByPriority || { low: 0, medium: 0, high: 0, critical: 0 };
+                            return (
+                              <div className="flex flex-row gap-1.5 min-w-[260px]">
+                                <div className="flex-1 min-w-[120px] bg-gray-100 rounded px-1.5 py-0.5 border border-gray-200 overflow-hidden flex flex-wrap">
+                                  <div className="text-[10px] text-gray-500 mb-0.5 w-full">Open</div>
+                                  <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                                    {trendOpen ? (() => { const dir = (trendOpen.maxDaysInState != null && getCorrectiveSparklineDirectionByDays) ? getCorrectiveSparklineDirectionByDays(trendOpen.maxDaysInState) : (trendOpen.current > (trendOpen.previous ?? trendOpen.current) ? 'up' : trendOpen.current < (trendOpen.previous ?? trendOpen.current) ? 'down' : 'neutral'); const col = (trendOpen.maxDaysInState != null && getCorrectiveSparklineColorByDays) ? getCorrectiveSparklineColorByDays(trendOpen.maxDaysInState) : getSparklineColor('remedial'); const tt = trendOpen.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; const ArrowIcon = dir === 'up' ? ArrowUpRight : dir === 'down' ? ArrowDownRight : Minus; const arrowClass = dir === 'up' ? 'text-red-600' : dir === 'down' ? 'text-green-600' : 'text-gray-400'; return <><span className={arrowClass + ' shrink-0 rem_arrowOpen'} data-testid={'rem_arrowOpen_' + park.id} title={tt}><ArrowIcon size={10} /></span><span className="text-xs font-bold text-[#201F1E] shrink-0">{openCount}</span><span className="shrink-0 rem_sparkOpen" data-testid={'rem_sparkOpen_' + park.id} title={tt}><Sparkline data={getSparklineData(dir)} color={col} width={24} height={10} /></span></>; })() : <span className="text-xs font-bold text-[#201F1E] shrink-0">{openCount}</span>}
+                                    <div className="flex gap-1 text-[10px] text-gray-500 shrink-0">
+                                      <div className="flex flex-col items-center"><span>L</span><span className="font-bold text-[#201F1E]">{byP.low}</span></div>
+                                      <div className="flex flex-col items-center"><span>M</span><span className="font-bold text-[#201F1E]">{byP.medium}</span></div>
+                                      <div className="flex flex-col items-center"><span>H</span><span className="font-bold text-[#201F1E]">{byP.high}</span></div>
+                                      <div className="flex flex-col items-center"><span>C</span><span className="font-bold text-[#201F1E]">{byP.critical}</span></div>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="flex-1 min-w-0 bg-gray-50 rounded p-1.5 border border-gray-100">
+                                  <div className="text-[10px] text-gray-500 mb-0.5">In Progress</div>
+                                  <div className="flex items-center justify-between gap-1 flex-nowrap">
+                                    {trendInProgress ? (() => { const dir = (trendInProgress.maxDaysInState != null && getCorrectiveSparklineDirectionByDays) ? getCorrectiveSparklineDirectionByDays(trendInProgress.maxDaysInState) : (trendInProgress.current > (trendInProgress.previous ?? trendInProgress.current) ? 'up' : trendInProgress.current < (trendInProgress.previous ?? trendInProgress.current) ? 'down' : 'neutral'); const col = (trendInProgress.maxDaysInState != null && getCorrectiveSparklineColorByDays) ? getCorrectiveSparklineColorByDays(trendInProgress.maxDaysInState) : getSparklineColor('remedial'); const tt = trendInProgress.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; const ArrowIcon = dir === 'up' ? ArrowUpRight : dir === 'down' ? ArrowDownRight : Minus; const arrowClass = dir === 'up' ? 'text-red-600' : dir === 'down' ? 'text-green-600' : 'text-gray-400'; return <><span className={arrowClass + ' shrink-0 rem_arrowInProgress'} data-testid={'rem_arrowInProgress_' + park.id} title={tt}><ArrowIcon size={14} /></span><span className="text-xs font-bold text-[#201F1E] shrink-0">{inProgressCount}</span><span className="shrink-0 rem_sparkInProgress" data-testid={'rem_sparkInProgress_' + park.id} title={tt}><Sparkline data={getSparklineData(dir)} color={col} /></span></>; })() : <><span className="text-gray-400 shrink-0 rem_arrowInProgress" data-testid={'rem_arrowInProgress_' + park.id} title="No trend data"><Minus size={14} /></span><span className="text-xs font-bold text-[#201F1E] shrink-0">{inProgressCount}</span></>}
+                                  </div>
+                                </div>
+                                <div className="flex-1 min-w-0 bg-gray-50 rounded p-1.5 border border-gray-100">
+                                  <div className="text-[10px] text-gray-500 mb-0.5">Further more</div>
+                                  <div className="flex items-center justify-between gap-1 flex-nowrap">
+                                    {trendFurther ? (() => { const dir = (trendFurther.maxDaysInState != null && getCorrectiveSparklineDirectionByDays) ? getCorrectiveSparklineDirectionByDays(trendFurther.maxDaysInState) : (trendFurther.current > (trendFurther.previous ?? trendFurther.current) ? 'up' : trendFurther.current < (trendFurther.previous ?? trendFurther.current) ? 'down' : 'neutral'); const col = (trendFurther.maxDaysInState != null && getCorrectiveSparklineColorByDays) ? getCorrectiveSparklineColorByDays(trendFurther.maxDaysInState) : getSparklineColor('remedial'); const tt = trendFurther.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; const ArrowIcon = dir === 'up' ? ArrowUpRight : dir === 'down' ? ArrowDownRight : Minus; const arrowClass = dir === 'up' ? 'text-red-600' : dir === 'down' ? 'text-green-600' : 'text-gray-400'; return <><span className={arrowClass + ' shrink-0 rem_arrowFurther'} data-testid={'rem_arrowFurther_' + park.id} title={tt}><ArrowIcon size={14} /></span><span className="text-xs font-bold text-[#201F1E] shrink-0">{furtherCount}</span><span className="shrink-0 rem_sparkFurther" data-testid={'rem_sparkFurther_' + park.id} title={tt}><Sparkline data={getSparklineData(dir)} color={col} /></span></>; })() : <><span className="text-gray-400 shrink-0 rem_arrowFurther" data-testid={'rem_arrowFurther_' + park.id} title="No trend data"><Minus size={14} /></span><span className="text-xs font-bold text-[#201F1E] shrink-0">{furtherCount}</span></>}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })()}
+                      </td>
+                      <td className="py-0.5 px-4 text-center text-xs text-gray-700">
+                          {park.portfolioName || '-'}
+                      </td>
+                      <td className="py-0.5 px-4 text-right">
+                        <button
+                          onClick={() => handleOpenForm(park)}
+                          className="p-2 rounded hover:bg-brand-primary/10 text-brand-primary transition-colors inline-flex items-center justify-center"
+                          title="Open Solar Park form"
+                        >
+                          <ExternalLink size={18} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            </>
+            )}
+          </div>
+        );
+      };
+
+      const App = () => {
+        const [portfolio, setPortfolio] = useState([]);
+        const [searchQuery, setSearchQuery] = useState('');
+        const [selectedPortfolios, setSelectedPortfolios] = useState([]);
+        const [hiddenParkIds, setHiddenParkIds] = useState([]);
+        const [loading, setLoading] = useState(true);
+        const [error, setError] = useState(null);
+
+        useEffect(function initDataverseAndLoadParks() {
+          // --- Dev Mock: if running locally (no Xrm), use mock data ---
+          if (window.DevMock && window.DevMock.isActive()) {
+            const mockData = window.DevMock.get('portfolio');
+            console.log('[DevMock] Using mock portfolio data (' + (mockData ? mockData.length : 0) + ' parks)');
+            setTimeout(() => {
+              setPortfolio(mockData || []);
+              setLoading(false);
+            }, window.DevMock.delayMs);
+            return;
+          }
+          // -----------------------------------------------------------
+
+          const MAX_ATTEMPTS = 30;
+          const POLL_INTERVAL_MS = 200;
+
+          let timeoutId;
+
+          const attemptLoad = (attempt) => {
+            console.log('🔁 Checking Dataverse context attempt', attempt, 'window.parent:', window.parent);
+            const webApi = getXrmWebApi(true);
+            if (webApi && webApi.retrieveMultipleRecords) {
+              console.log('🚀 Starting data load...');
+              const Data = window.PowerDashboardData;
+              if (!Data || typeof Data.loadAllParks !== 'function') {
+                setError('PowerDashboard.data.js failed to load properly.');
+                setLoading(false);
+                return;
+              }
+              setLoading(true);
+              setError(null);
+              Data.loadAllParks(webApi)
+                .then((parks) => { setPortfolio(parks); setError(null); })
+                .catch((err) => { setError(err.message || 'Failed to load data.'); setPortfolio([]); })
+                .finally(() => setLoading(false));
+              return;
+            }
+            if (attempt >= MAX_ATTEMPTS) {
+              setError('Dataverse framework (Xrm.WebApi) not found. Open this page inside a Model-driven app.');
+              setLoading(false);
+              return;
+            }
+            timeoutId = setTimeout(() => attemptLoad(attempt + 1), POLL_INTERVAL_MS);
+          };
+
+          // Delay initial Dataverse bootstrap slightly to give Xrm time to become available (useful for ngrok/local redirects)
+          setTimeout(() => {
+            attemptLoad(1);
+          }, 2000);
+
+          return function cleanup() {
+            if (timeoutId) {
+              clearTimeout(timeoutId);
+            }
+          };
+        }, []);
+
+        const portfolioOptions = useMemo(() => {
+          const names = new Set();
+          portfolio.forEach((park) => {
+            if (park.portfolioName) {
+              names.add(park.portfolioName);
+            }
+          });
+          return Array.from(names).sort();
+        }, [portfolio]);
+
+        const filteredByPortfolio = useMemo(() => {
+          if (!selectedPortfolios || selectedPortfolios.length === 0) {
+            return portfolio;
+          }
+          const setSel = new Set(selectedPortfolios);
+          return portfolio.filter((park) => park.portfolioName && setSel.has(park.portfolioName));
+        }, [portfolio, selectedPortfolios]);
+
+        const aggregates = useMemo(() => {
+          const effective = portfolio.filter(
+            (park) => !hiddenParkIds || !hiddenParkIds.includes(park.id)
+          );
+          return effective.reduce(
+            (acc, park) => ({
+              totalPreventive: acc.totalPreventive + (park.preventiveCount || 0),
+              totalPreventiveInProgress: acc.totalPreventiveInProgress + (park.preventiveInProgressCount || 0),
+              totalPreventivePrevious: acc.totalPreventivePrevious + (park.preventiveCompletedCount || 0),
+              totalCorrective: acc.totalCorrective + (park.correctiveCount || 0),
+              totalCorrectiveOpen: acc.totalCorrectiveOpen + (park.correctiveOpenCount || 0),
+              totalCorrectiveInProgress: acc.totalCorrectiveInProgress + (park.correctiveInProgressCount || 0),
+              totalCorrectiveFurther: acc.totalCorrectiveFurther + (park.correctiveFurtherCount ?? Math.max(0, (park.correctiveCount || 0) - (park.correctiveOpenCount || 0) - (park.correctiveInProgressCount || 0))),
+              totalCorrectivePrevious: acc.totalCorrectivePrevious + (park.correctiveCompletedCount || 0),
+              totalRemedialOpen: acc.totalRemedialOpen + (park.remedialOpenCount || 0),
+              totalRemedialInProgress: acc.totalRemedialInProgress + (park.remedialInProgressCount || 0),
+              totalRemedialPrevious: acc.totalRemedialPrevious + (park.remedialCompletedCount || 0),
+              totalCritical: acc.totalCritical + (park.criticalDefects || 0),
+            }),
+            {
+              totalPreventive: 0,
+              totalPreventiveInProgress: 0,
+              totalPreventivePrevious: 0,
+              totalCorrective: 0,
+              totalCorrectiveOpen: 0,
+              totalCorrectiveInProgress: 0,
+              totalCorrectiveFurther: 0,
+              totalCorrectivePrevious: 0,
+              totalRemedialOpen: 0,
+              totalRemedialInProgress: 0,
+              totalRemedialPrevious: 0,
+              totalCritical: 0
+            }
+          );
+        }, [portfolio, hiddenParkIds]);
+
+        const handleToggleParkVisibility = (id) => {
+          setHiddenParkIds((prev) => {
+            if (!prev) return [id];
+            return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+          });
+        };
+
+        if (loading) {
+          return (
+            <div className="min-h-screen bg-[#faf9f8] flex items-center justify-center">
+              <div className="text-center">
+                <div className="inline-block w-12 h-12 border-4 border-brand-primary border-t-transparent rounded-full animate-spin mb-4"></div>
+                <p className="text-gray-600 font-medium">Loading data…</p>
+              </div>
+            </div>
+          );
+        }
+
+        if (error) {
+          return (
+            <div className="min-h-screen bg-[#faf9f8] flex items-center justify-center p-6">
+              <div className="bg-red-50 border border-red-200 rounded-lg p-6 max-w-md text-center">
+                <p className="text-red-600 font-semibold mb-2">Error</p>
+                <p className="text-gray-700 text-sm">{error}</p>
+              </div>
+            </div>
+          );
+        }
+
+        if (portfolio.length === 0) {
+          return (
+            <div className="min-h-screen bg-[#faf9f8] flex items-center justify-center p-6">
+              <div className="bg-white border border-gray-200 rounded-lg p-8 max-w-md text-center shadow-sm">
+                <p className="text-gray-600 font-medium mb-2">No active Solar Parks found</p>
+                <p className="text-gray-500 text-sm">There are no active Solar Park records in the system.</p>
+              </div>
+            </div>
+          );
+        }
+
+        const correctiveWeeklyTrend = (window.DevMock && window.DevMock.isActive()) ? (window.DevMock.get('correctiveWeeklyTrend') || null) : null;
+        const preventiveWeeklyTrend = (window.DevMock && window.DevMock.isActive()) ? (window.DevMock.get('preventiveWeeklyTrend') || null) : null;
+        const remedialWeeklyTrend = (window.DevMock && window.DevMock.isActive()) ? (window.DevMock.get('remedialWeeklyTrend') || null) : null;
+        return (
+          <div className="min-h-screen bg-[#faf9f8] text-[#201f1e] font-sans pb-12">
+            
+            <header className="bg-[#EDEBE9] text-[#201F1E] shadow-md sticky top-0 z-50">
+              <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 h-14 md:h-12 flex items-center justify-between">
+                  <div className="flex items-center gap-3 overflow-hidden">
+                      <LayoutDashboard className="h-5 w-5 text-brand-accent flex-shrink-0" />
+                      <span className="font-semibold text-lg tracking-tight truncate">Solar Power Dashboard local</span>
+                  </div>
+              </div>
+            </header>
+
+            <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6 md:py-8 space-y-6 md:space-y-8">
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
+                  {(() => {
+                    const c = getCardHeaderIconConfig(aggregates?.totalCorrectiveOpen || 0, aggregates?.totalCorrectiveInProgress || 0, aggregates?.totalCorrectiveFurther || 0);
+                    const HeaderIcon = c.iconKey === 'alert' ? AlertTriangle : c.iconKey === 'activity' ? Activity : CheckCircle2;
+                    return (
+                  <div className="bg-white p-6 rounded-md shadow-fluent-card hover:shadow-fluent-hover transition-shadow duration-200 border-l-4 border-brand-primary flex flex-col justify-between min-h-[10rem] relative overflow-hidden group w-full">
+                    <div className="absolute top-0 right-0 p-4 text-gray-400 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-110 duration-500">
+                      <HeaderIcon size={64} />
+                    </div>
+                    <div className="flex justify-between items-start z-10">
+                      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Corrective Workflow</h3>
+                      <div className={c.colorClass}><HeaderIcon /></div>
+                    </div>
+                    <div className="z-10 mt-3 space-y-1.5 text-sm text-[#201F1E]">
+                      <div className="flex justify-between items-center">
+                        <span className="font-medium">Open Tasks</span>
+                        <span className="flex items-center gap-1">
+                          {correctiveWeeklyTrend?.open && (() => { const t = getTrendInfo(correctiveWeeklyTrend.open.current, correctiveWeeklyTrend.open.previous); const b = correctiveWeeklyTrend.open; const ArrowIcon = t.type === 'up' ? ArrowUpRight : t.type === 'down' ? ArrowDownRight : Minus; const arrowClass = t.type === 'up' ? 'text-red-600' : t.type === 'down' ? 'text-green-600' : 'text-gray-400'; const sparkColor = (b.maxDaysInState != null && getCorrectiveSparklineColorByDays) ? getCorrectiveSparklineColorByDays(b.maxDaysInState) : (t.type === 'up' ? '#dc2626' : t.type === 'down' ? '#16a34a' : '#9ca3af'); const sparkDir = (b.maxDaysInState != null && getCorrectiveSparklineDirectionByDays) ? getCorrectiveSparklineDirectionByDays(b.maxDaysInState) : t.type; const tt = b.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; return <span className={arrowClass + ' cor_arrowOpen shrink-0'} data-testid="cor_arrowOpen" title={tt}><ArrowIcon size={12} /></span>; })()}
+                          <span className="font-bold">{aggregates?.totalCorrectiveOpen || 0}</span>
+                          {correctiveWeeklyTrend?.open && (() => { const t = getTrendInfo(correctiveWeeklyTrend.open.current, correctiveWeeklyTrend.open.previous); const b = correctiveWeeklyTrend.open; const sparkColor = (b.maxDaysInState != null && getCorrectiveSparklineColorByDays) ? getCorrectiveSparklineColorByDays(b.maxDaysInState) : (t.type === 'up' ? '#dc2626' : t.type === 'down' ? '#16a34a' : '#9ca3af'); const sparkDir = (b.maxDaysInState != null && getCorrectiveSparklineDirectionByDays) ? getCorrectiveSparklineDirectionByDays(b.maxDaysInState) : t.type; const tt = b.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; return <span className="shrink-0 cor_sparkOpen" data-testid="cor_sparkOpen" title={tt}><Sparkline data={getSparklineData(sparkDir)} color={sparkColor} width={24} height={10} /></span>; })()}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="font-medium">In Progress Tasks</span>
+                        <span className="flex items-center gap-1">
+                          {correctiveWeeklyTrend?.inProgress && (() => { const t = getTrendInfo(correctiveWeeklyTrend.inProgress.current, correctiveWeeklyTrend.inProgress.previous); const b = correctiveWeeklyTrend.inProgress; const ArrowIcon = t.type === 'up' ? ArrowUpRight : t.type === 'down' ? ArrowDownRight : Minus; const arrowClass = t.type === 'up' ? 'text-red-600' : t.type === 'down' ? 'text-green-600' : 'text-gray-400'; const sparkColor = (b.maxDaysInState != null && getCorrectiveSparklineColorByDays) ? getCorrectiveSparklineColorByDays(b.maxDaysInState) : (t.type === 'up' ? '#dc2626' : t.type === 'down' ? '#16a34a' : '#9ca3af'); const sparkDir = (b.maxDaysInState != null && getCorrectiveSparklineDirectionByDays) ? getCorrectiveSparklineDirectionByDays(b.maxDaysInState) : t.type; const tt = b.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; return <span className={arrowClass + ' cor_arrowInProgress shrink-0'} data-testid="cor_arrowInProgress" title={tt}><ArrowIcon size={12} /></span>; })()}
+                          <span className="font-bold">{aggregates?.totalCorrectiveInProgress || 0}</span>
+                          {correctiveWeeklyTrend?.inProgress && (() => { const t = getTrendInfo(correctiveWeeklyTrend.inProgress.current, correctiveWeeklyTrend.inProgress.previous); const b = correctiveWeeklyTrend.inProgress; const sparkColor = (b.maxDaysInState != null && getCorrectiveSparklineColorByDays) ? getCorrectiveSparklineColorByDays(b.maxDaysInState) : (t.type === 'up' ? '#dc2626' : t.type === 'down' ? '#16a34a' : '#9ca3af'); const sparkDir = (b.maxDaysInState != null && getCorrectiveSparklineDirectionByDays) ? getCorrectiveSparklineDirectionByDays(b.maxDaysInState) : t.type; const tt = b.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; return <span className="shrink-0 cor_sparkInProgress" data-testid="cor_sparkInProgress" title={tt}><Sparkline data={getSparklineData(sparkDir)} color={sparkColor} width={24} height={10} /></span>; })()}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="font-medium">Further more</span>
+                        <span className="flex items-center gap-1">
+                          {correctiveWeeklyTrend?.further && (() => { const t = getTrendInfo(correctiveWeeklyTrend.further.current, correctiveWeeklyTrend.further.previous); const b = correctiveWeeklyTrend.further; const ArrowIcon = t.type === 'up' ? ArrowUpRight : t.type === 'down' ? ArrowDownRight : Minus; const arrowClass = t.type === 'up' ? 'text-red-600' : t.type === 'down' ? 'text-green-600' : 'text-gray-400'; const sparkColor = (b.maxDaysInState != null && getCorrectiveSparklineColorByDays) ? getCorrectiveSparklineColorByDays(b.maxDaysInState) : (t.type === 'up' ? '#dc2626' : t.type === 'down' ? '#16a34a' : '#9ca3af'); const sparkDir = (b.maxDaysInState != null && getCorrectiveSparklineDirectionByDays) ? getCorrectiveSparklineDirectionByDays(b.maxDaysInState) : t.type; const tt = b.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; return <span className={arrowClass + ' cor_arrowFurther shrink-0'} data-testid="cor_arrowFurther" title={tt}><ArrowIcon size={12} /></span>; })()}
+                          <span className="font-bold">{aggregates?.totalCorrectiveFurther || 0}</span>
+                          {correctiveWeeklyTrend?.further && (() => { const t = getTrendInfo(correctiveWeeklyTrend.further.current, correctiveWeeklyTrend.further.previous); const b = correctiveWeeklyTrend.further; const sparkColor = (b.maxDaysInState != null && getCorrectiveSparklineColorByDays) ? getCorrectiveSparklineColorByDays(b.maxDaysInState) : (t.type === 'up' ? '#dc2626' : t.type === 'down' ? '#16a34a' : '#9ca3af'); const sparkDir = (b.maxDaysInState != null && getCorrectiveSparklineDirectionByDays) ? getCorrectiveSparklineDirectionByDays(b.maxDaysInState) : t.type; const tt = b.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; return <span className="shrink-0 cor_sparkFurther" data-testid="cor_sparkFurther" title={tt}><Sparkline data={getSparklineData(sparkDir)} color={sparkColor} width={24} height={10} /></span>; })()}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="font-medium">Completed</span>
+                        <span className="flex items-center gap-1">
+                          {correctiveWeeklyTrend?.completed && (() => { const t = getTrendInfo(correctiveWeeklyTrend.completed.current, correctiveWeeklyTrend.completed.previous); const ArrowIcon = t.type === 'up' ? ArrowUpRight : t.type === 'down' ? ArrowDownRight : Minus; const arrowClass = t.type === 'up' ? 'text-red-600' : t.type === 'down' ? 'text-green-600' : 'text-gray-400'; const sparkColor = t.type === 'up' ? '#dc2626' : t.type === 'down' ? '#16a34a' : '#9ca3af'; return <span className={arrowClass + ' cor_arrowCompleted shrink-0'} data-testid="cor_arrowCompleted" title={correctiveTrendTooltip}><ArrowIcon size={12} /></span>; })()}
+                          <span className="font-bold">{aggregates?.totalCorrectivePrevious || 0}</span>
+                          {correctiveWeeklyTrend?.completed && (() => { const t = getTrendInfo(correctiveWeeklyTrend.completed.current, correctiveWeeklyTrend.completed.previous); const sparkColor = t.type === 'up' ? '#dc2626' : t.type === 'down' ? '#16a34a' : '#9ca3af'; return <span className="shrink-0 cor_sparkCompleted" data-testid="cor_sparkCompleted" title={correctiveTrendTooltip}><Sparkline data={getSparklineData(t.type)} color={sparkColor} width={24} height={10} /></span>; })()}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                    );
+                  })()}
+                  {(() => {
+                    const preventiveOpen = Math.max(0, (aggregates?.totalPreventive || 0) - (aggregates?.totalPreventiveInProgress || 0));
+                    const preventiveInProgress = aggregates?.totalPreventiveInProgress || 0;
+                    const preventiveCompleted = aggregates?.totalPreventivePrevious ?? 0;
+                    const pc = (getPreventiveHeaderIconConfig && getPreventiveHeaderIconConfig(preventiveOpen, preventiveInProgress, preventiveCompleted)) || { colorClass: 'text-brand-primary opacity-80', iconKey: 'check' };
+                    const PreventiveHeaderIcon = pc.iconKey === 'alert' ? AlertTriangle : pc.iconKey === 'activity' ? Activity : CheckCircle2;
+                    return (
+                  <div className="bg-white p-6 rounded-md shadow-fluent-card hover:shadow-fluent-hover transition-shadow duration-200 border-l-4 border-brand-primary flex flex-col justify-between min-h-[10rem] relative overflow-hidden group w-full">
+                    <div className="absolute top-0 right-0 p-4 text-gray-400 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-110 duration-500">
+                      <PreventiveHeaderIcon size={64} />
+                    </div>
+                    <div className="flex justify-between items-start z-10">
+                      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Preventative Workflow</h3>
+                      <div className={pc.colorClass}><PreventiveHeaderIcon /></div>
+                    </div>
+                    <div className="z-10 mt-3 space-y-1.5 text-sm text-[#201F1E]">
+                      <div className="flex justify-between items-center">
+                        <span className="font-medium">Open Tasks</span>
+                        <span className="flex items-center gap-1">
+                          <span className="font-bold">{Math.max(0, (aggregates?.totalPreventive || 0) - (aggregates?.totalPreventiveInProgress || 0))}</span>
+                          {preventiveWeeklyTrend?.open && (() => { const sparkColor = getPreventiveSparklineColorByRatio(preventiveOpen, preventiveCompleted); const sparkDir = sparkColor === '#16a34a' ? 'down' : 'up'; const tt = preventiveSparklineRatioTooltip; return <span className="shrink-0 prev_sparkOpen" data-testid="prev_sparkOpen" title={tt}><Sparkline data={getSparklineData(sparkDir)} color={sparkColor} width={24} height={10} /></span>; })()}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="font-medium">In Progress Tasks</span>
+                        <span className="flex items-center gap-1">
+                          <span className="font-bold">{aggregates?.totalPreventiveInProgress || 0}</span>
+                          {preventiveWeeklyTrend?.inProgress && (() => { const sparkColor = getPreventiveSparklineColorByRatio(preventiveInProgress, preventiveCompleted); const sparkDir = sparkColor === '#16a34a' ? 'down' : 'up'; const tt = preventiveSparklineRatioTooltip; return <span className="shrink-0 prev_sparkInProgress" data-testid="prev_sparkInProgress" title={tt}><Sparkline data={getSparklineData(sparkDir)} color={sparkColor} width={24} height={10} /></span>; })()}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="font-medium">Completed</span>
+                        <span className="flex items-center gap-1">
+                          <span className="font-bold">{aggregates?.totalPreventivePrevious ?? 0}</span>
+                          {preventiveWeeklyTrend?.completed && (() => { const sparkColor = getPreventiveSparklineColorByCompletedRatio(preventiveCompleted, preventiveOpen, preventiveInProgress); const sparkDir = sparkColor === '#16a34a' ? 'down' : 'up'; const tt = preventiveSparklineCompletedRatioTooltip; return <span className="shrink-0 prev_sparkCompleted" data-testid="prev_sparkCompleted" title={tt}><Sparkline data={getSparklineData(sparkDir)} color={sparkColor} width={24} height={10} /></span>; })()}
+                        </span>
+                      </div>
+                      {preventiveWeeklyTrend?.completed?.previous != null && (
+                        <div className="flex justify-between items-center">
+                          <span className="font-medium">Previous month</span>
+                          <span className="flex items-center gap-1">
+                            <span className="font-bold">{preventiveWeeklyTrend.completed.previous}</span>
+                            {preventiveWeeklyTrend?.completed && (() => { const t = getTrendInfo(preventiveWeeklyTrend.completed.current, preventiveWeeklyTrend.completed.previous); const sparkColor = t.type === 'up' ? '#dc2626' : t.type === 'down' ? '#16a34a' : '#9ca3af'; return <span className="shrink-0 prev_sparkPreviousMonth" data-testid="prev_sparkPreviousMonth" title={correctiveTrendTooltip}><Sparkline data={getSparklineData(t.type)} color={sparkColor} width={24} height={10} /></span>; })()}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                    );
+                  })()}
+                  {(() => {
+                    const rc = getCardHeaderIconConfig(aggregates?.totalRemedialOpen || 0, aggregates?.totalRemedialInProgress || 0, 0);
+                    const RemedialHeaderIcon = rc.iconKey === 'alert' ? AlertTriangle : rc.iconKey === 'activity' ? Activity : CheckCircle2;
+                    return (
+                  <div className="bg-white p-6 rounded-md shadow-fluent-card hover:shadow-fluent-hover transition-shadow duration-200 border-l-4 border-brand-primary flex flex-col justify-between min-h-[10rem] relative overflow-hidden group w-full">
+                    <div className="absolute top-0 right-0 p-4 text-gray-400 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-110 duration-500">
+                      <RemedialHeaderIcon size={64} />
+                    </div>
+                    <div className="flex justify-between items-start z-10">
+                      <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">Remedial</h3>
+                      <div className={rc.colorClass}><RemedialHeaderIcon /></div>
+                    </div>
+                    <div className="z-10 mt-3 space-y-1.5 text-sm text-[#201F1E]">
+                      <div className="flex justify-between items-center">
+                        <span className="font-medium">Open Tasks</span>
+                        <span className="flex items-center gap-1">
+                          {remedialWeeklyTrend?.open && (() => { const t = getTrendInfo(remedialWeeklyTrend.open.current, remedialWeeklyTrend.open.previous); const b = remedialWeeklyTrend.open; const ArrowIcon = t.type === 'up' ? ArrowUpRight : t.type === 'down' ? ArrowDownRight : Minus; const arrowClass = t.type === 'up' ? 'text-red-600' : t.type === 'down' ? 'text-green-600' : 'text-gray-400'; const tt = b.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; return <span className={arrowClass + ' rem_arrowOpen shrink-0'} data-testid="rem_arrowOpen" title={tt}><ArrowIcon size={12} /></span>; })()}
+                          <span className="font-bold">{aggregates?.totalRemedialOpen || 0}</span>
+                          {remedialWeeklyTrend?.open && (() => { const t = getTrendInfo(remedialWeeklyTrend.open.current, remedialWeeklyTrend.open.previous); const b = remedialWeeklyTrend.open; const sparkColor = (b.maxDaysInState != null && getCorrectiveSparklineColorByDays) ? getCorrectiveSparklineColorByDays(b.maxDaysInState) : (t.type === 'up' ? '#dc2626' : t.type === 'down' ? '#16a34a' : '#9ca3af'); const sparkDir = (b.maxDaysInState != null && getCorrectiveSparklineDirectionByDays) ? getCorrectiveSparklineDirectionByDays(b.maxDaysInState) : t.type; const tt = b.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; return <span className="shrink-0 rem_sparkOpen" data-testid="rem_sparkOpen" title={tt}><Sparkline data={getSparklineData(sparkDir)} color={sparkColor} width={24} height={10} /></span>; })()}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="font-medium">In Progress Tasks</span>
+                        <span className="flex items-center gap-1">
+                          {remedialWeeklyTrend?.inProgress && (() => { const t = getTrendInfo(remedialWeeklyTrend.inProgress.current, remedialWeeklyTrend.inProgress.previous); const b = remedialWeeklyTrend.inProgress; const ArrowIcon = t.type === 'up' ? ArrowUpRight : t.type === 'down' ? ArrowDownRight : Minus; const arrowClass = t.type === 'up' ? 'text-red-600' : t.type === 'down' ? 'text-green-600' : 'text-gray-400'; const tt = b.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; return <span className={arrowClass + ' rem_arrowInProgress shrink-0'} data-testid="rem_arrowInProgress" title={tt}><ArrowIcon size={12} /></span>; })()}
+                          <span className="font-bold">{aggregates?.totalRemedialInProgress || 0}</span>
+                          {remedialWeeklyTrend?.inProgress && (() => { const t = getTrendInfo(remedialWeeklyTrend.inProgress.current, remedialWeeklyTrend.inProgress.previous); const b = remedialWeeklyTrend.inProgress; const sparkColor = (b.maxDaysInState != null && getCorrectiveSparklineColorByDays) ? getCorrectiveSparklineColorByDays(b.maxDaysInState) : (t.type === 'up' ? '#dc2626' : t.type === 'down' ? '#16a34a' : '#9ca3af'); const sparkDir = (b.maxDaysInState != null && getCorrectiveSparklineDirectionByDays) ? getCorrectiveSparklineDirectionByDays(b.maxDaysInState) : t.type; const tt = b.maxDaysInState != null ? correctiveSparklineTooltip : correctiveTrendTooltip; return <span className="shrink-0 rem_sparkInProgress" data-testid="rem_sparkInProgress" title={tt}><Sparkline data={getSparklineData(sparkDir)} color={sparkColor} width={24} height={10} /></span>; })()}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="font-medium">Completed</span>
+                        <span className="flex items-center gap-1">
+                          {remedialWeeklyTrend?.completed && (() => { const t = getTrendInfo(remedialWeeklyTrend.completed.current, remedialWeeklyTrend.completed.previous); const ArrowIcon = t.type === 'up' ? ArrowUpRight : t.type === 'down' ? ArrowDownRight : Minus; const arrowClass = t.type === 'up' ? 'text-red-600' : t.type === 'down' ? 'text-green-600' : 'text-gray-400'; return <span className={arrowClass + ' rem_arrowCompleted shrink-0'} data-testid="rem_arrowCompleted" title={correctiveTrendTooltip}><ArrowIcon size={12} /></span>; })()}
+                          <span className="font-bold">{aggregates?.totalRemedialPrevious || 0}</span>
+                          {remedialWeeklyTrend?.completed && (() => { const t = getTrendInfo(remedialWeeklyTrend.completed.current, remedialWeeklyTrend.completed.previous); const sparkColor = t.type === 'up' ? '#dc2626' : t.type === 'down' ? '#16a34a' : '#9ca3af'; return <span className="shrink-0" title={correctiveTrendTooltip}><Sparkline data={getSparklineData(t.type)} color={sparkColor} width={24} height={10} /></span>; })()}
+                        </span>
+                      </div>
+                      {remedialWeeklyTrend?.completed?.previous != null && (
+                        <div className="flex justify-between items-center">
+                          <span className="font-medium">Previous month</span>
+                          <span className="flex items-center gap-1">
+                            {remedialWeeklyTrend?.completed && (() => { const t = getTrendInfo(remedialWeeklyTrend.completed.current, remedialWeeklyTrend.completed.previous); const ArrowIcon = t.type === 'up' ? ArrowUpRight : t.type === 'down' ? ArrowDownRight : Minus; const arrowClass = t.type === 'up' ? 'text-red-600' : t.type === 'down' ? 'text-green-600' : 'text-gray-400'; return <span className={arrowClass + ' rem_arrowPreviousMonth shrink-0'} data-testid="rem_arrowPreviousMonth" title={correctiveTrendTooltip}><ArrowIcon size={12} /></span>; })()}
+                            <span className="font-bold">{remedialWeeklyTrend.completed.previous}</span>
+                            {remedialWeeklyTrend?.completed && (() => { const t = getTrendInfo(remedialWeeklyTrend.completed.current, remedialWeeklyTrend.completed.previous); const sparkColor = t.type === 'up' ? '#dc2626' : t.type === 'down' ? '#16a34a' : '#9ca3af'; return <span className="shrink-0 rem_sparkPreviousMonth" data-testid="rem_sparkPreviousMonth" title={correctiveTrendTooltip}><Sparkline data={getSparklineData(t.type)} color={sparkColor} width={24} height={10} /></span>; })()}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                    );
+                  })()}
+              </div>
+
+              <section>
+                   <PortfolioGrid
+                     data={filteredByPortfolio}
+                     allCount={portfolio.length}
+                     searchQuery={searchQuery}
+                     onSearchChange={setSearchQuery}
+                     portfolioOptions={portfolioOptions}
+                     selectedPortfolios={selectedPortfolios}
+                     onSelectedPortfoliosChange={setSelectedPortfolios}
+                     hiddenParkIds={hiddenParkIds}
+                     onToggleParkVisibility={handleToggleParkVisibility}
+                   />
+              </section>
+
+            </main>
+          </div>
+        );
+      };
+
+      ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
